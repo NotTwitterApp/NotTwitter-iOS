@@ -4,6 +4,23 @@ This is a clean standalone iOS app for the Bluesky-backed Not Twitter build. It 
 
 The app is native UIKit: Home, Explore, Notifications, Profile, and Compose are rendered on-device and backed by ATProto XRPC calls.
 
+## Installation
+
+To install Not Twitter on your iPhone, you’ll need to **sideload the `.ipa` file** using a tool such as:
+
+- [SideStore](https://sidestore.io/)
+- [AltStore Classic](https://altstore.io/)
+
+Follow the setup instructions on your chosen tool’s official website, then import the Not Twitter IPA to sign and install it. Other compatible IPA sideloading tools can also be used.
+
+## Screenshots
+
+| Home | Explore | Notifications |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/home.png" alt="Home timeline with a quoted post and photo in dark mode" width="260"> | <img src="docs/screenshots/explore.png" alt="Explore page with search and trending topics in dark mode" width="260"> | <img src="docs/screenshots/notifications.png" alt="Notifications page showing follows and likes in dark mode" width="260"> |
+
+## Building from source
+
 The native session layer uses Bluesky OAuth with DPoP and talks to:
 
 ```text
@@ -88,3 +105,9 @@ These checks exercise the production timing policy, not iOS networking or accoun
 switch concurrency. Those paths require device/simulator integration testing.
 Server-side revocation or the authorization server's maximum session lifetime can
 still require signing in again.
+
+## Acknowledgments
+
+Special thanks to [@actuallyaridan](https://github.com/actuallyaridan) and the
+[NeoFreeBird team](https://neofreebird.com/docs/) for their work on NeoFreeBird
+and the inspiration it provided for Not Twitter.
