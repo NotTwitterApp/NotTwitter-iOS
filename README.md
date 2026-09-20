@@ -21,6 +21,96 @@ Follow the setup instructions on your chosen tool’s official website, then imp
 
 ## Building from source
 
+The supported build helper runs on Linux and uses Theos to compile the native
+Objective-C/UIKit app. The current target is **arm64**, with the **iOS 16.5 SDK**
+and an **iOS 14.0 deployment target**. The IPA still needs device signing through
+a sideloading tool before it can run on an iPhone.
+
+### Requirements
+
+- Git, Bash, GNU Make, and the standard command-line tools used by Theos, including ZIP utilities.
+- [Theos with its Linux iOS cross-compilation toolchain](https://theos.dev/docs/installation-linux).
+- An `iPhoneOS16.5.sdk` SDK directory accessible to Theos.
+- `ldid` available on your `PATH` for the build’s signing step.
+- Optional: [xtool](https://xtool.sh/) and its runtime dependencies for signing and installing directly over USB. You can instead sideload the resulting IPA with SideStore or AltStore Classic.
+
+Follow the Theos installation guide to set up the build system and toolchain
+before running the commands below. The repository does not bundle the SDK,
+Theos, or xtool.
+
+### Clone and configure
+
+```bash
+git clone https://github.com/NotTwitterApp/NotTwitter-iOS.git
+cd NotTwitter-iOS
+
+# Adjust these paths to match your installed Theos and iOS SDK.
+export THEOS="$HOME/theos"
+export SDKROOT="$THEOS/sdks/iPhoneOS16.5.sdk"
+export PATH="$THEOS/bin:$PATH"
+
+# Confirm that the required SDK and signing tool are available.
+test -d "$SDKROOT"
+command -v ldid
+```
+
+If `ldid` is installed elsewhere, add its directory to `PATH`. Without explicit
+`THEOS` and `SDKROOT` values, `build-linux.sh` looks for
+`../_build/theos` and `../_build/sdks/iPhoneOS16.5.sdk`, relative to the repository.
+It also prepends `../_build/bin` to `PATH`; that directory is optional when your
+tools are already on `PATH`.
+
+### Create the IPA
+
+```bash
+./build-linux.sh
+```
+
+The helper performs a clean release build and packages the app in `packages/`.
+For version 1.0, the output is:
+
+```text
+packages/com.nottwitter.atproto_1.0.ipa
+```
+
+Import that IPA into your preferred sideloading tool. A successful build confirms
+compilation and packaging; device behavior needs to be tested separately.
+
+### Install directly with xtool
+
+Connect and unlock your iPhone, trust the computer when prompted, and configure
+xtool using its official setup instructions. With xtool available on `PATH`:
+
+```bash
+xtool auth login
+xtool devices
+./build-linux.sh --install --udid YOUR_CONNECTED_DEVICE_UDID
+```
+
+Replace `YOUR_CONNECTED_DEVICE_UDID` with the identifier reported by
+`xtool devices`. To install an IPA you already built:
+
+```bash
+xtool install --usb --udid YOUR_CONNECTED_DEVICE_UDID \
+  packages/com.nottwitter.atproto_1.0.ipa
+```
+
+By default, the helper leaves the IPA bundle identifier as `com.nottwitter.atproto`
+and lets xtool rewrite/sign it exactly once. Only set `XTOOL_BUNDLE_ID` when you
+need to force a specific explicit Apple Developer App ID.
+
+If xtool fails before listing devices with a missing shared-library error,
+repair its runtime dependencies before retrying installation. Packaging the IPA
+with `./build-linux.sh` does not require xtool.
+
+### Versioning
+
+For a release, keep `CFBundleShortVersionString` in `Resources/Info.plist` and
+`Version` in `control` in sync. Increment `CFBundleVersion` in
+`Resources/Info.plist` for each new build. This release is **1.0, build 144**.
+
+## Native networking
+
 The native session layer uses Bluesky OAuth with DPoP and talks to:
 
 ```text
@@ -31,29 +121,6 @@ https://api.bsky.app
 ```
 
 There is no WebView frontend wrapper in the app target.
-
-Build on Linux:
-
-```bash
-./build-linux.sh
-```
-
-Install with xtool through the build helper so the bundle identifier is rewritten for the selected provisioning profile:
-
-```bash
-xtool auth login
-./build-linux.sh --install --udid YOUR_CONNECTED_DEVICE_UDID
-```
-
-By default, the helper leaves the IPA bundle identifier as `com.nottwitter.atproto`
-and lets xtool rewrite/sign it exactly once. Only set `XTOOL_BUNDLE_ID` when you
-need to force a specific explicit Apple Developer App ID.
-
-Use `idevice_id -l` to identify the currently connected phone. The helper prefers
-`../_build/bin/xtool`; that local copy was rebuilt from xtool 1.19.0 with Swift 6.4
-after the system binary failed with an unresolved Foundation symbol. Rebuild
-using `swift build -c release --product xtool --jobs 4 --build-system native`
-if the Swift runtime changes again.
 
 ## APNs setup
 
