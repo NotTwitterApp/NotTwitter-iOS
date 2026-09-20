@@ -1,0 +1,8 @@
+Package: com.nottwitter.atproto
+Name: Not Twitter
+Version: 0.1.5
+Architecture: iphoneos-arm64
+Description: Standalone ATProto Bluesky client with Not Twitter branding.
+Maintainer: NotTwitter
+Author: NotTwitter
+Section: Applications
