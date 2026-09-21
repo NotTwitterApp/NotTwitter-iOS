@@ -16,6 +16,8 @@ body=method('- (void)sessionChanged:(NSNotification *)notification')
 client=(root/'NFBAtprotoClient.m').read_text()
 a=client.index('- (void)fetchAppViewGET:',client.index('@implementation'))
 client_method=client[a:client.index('\n}',a)+2]
+a=client.index('- (void)fetchRawAppViewGET:',client.index('@implementation'))
+client_method+='\n'+client[a:client.index('\n}',a)+2]
 session=(root/'NFBAtprotoSession.m').read_text()
 a=session.index('- (void)updateProfileFromDictionary:')
 profile_method=session[a:session.index('\n}',a)+2]
@@ -26,6 +28,7 @@ profile_method=re.sub(r'profile\[(@"[^"]+")\]',r'[profile objectForKey:\1]',prof
 head=r'''
 
 #import <Foundation/Foundation.h>
+#import "NFBPostLinkResolver.h"
 typedef void (^dispatch_block_t)(void);
 static void *dispatch_get_main_queue(void) { return NULL; }
 static void dispatch_async(void *q, dispatch_block_t b) { b(); }
@@ -160,10 +163,16 @@ int main(void) { @autoreleasepool {
  [client fetchAppViewGET:@"profile" params:nil requiresAuth:NO completion:^(id v,NSHTTPURLResponse *r,NSError *e) {canceled=e.code==NSURLErrorCancelled;succeeded=v!=nil;}];
  pendingResponse(@"A content",nil,nil);
  if(canceled || !succeeded)return 11;
- puts("PASS: stale AppView responses/fallbacks rejected, including A-B-A; current response delivered");
+ canceled=NO;succeeded=NO;
+ [client fetchAppViewGET:@"feed" params:nil requiresAuth:NO completion:^(id v,NSHTTPURLResponse *r,NSError *e){canceled=e.code==NSURLErrorCancelled;succeeded=v!=nil;}];
+ pendingResponse(@{@"post":@{@"uri":@"parent",@"author":@{@"did":@"did:plc:me"},@"record":@{@"text":@"https://bsky.app/profile/did:plc:other/post/test"}}},nil,nil);
+ NSUInteger requestsBeforeSwitch=networkCalls;s.accountGeneration++;
+ pendingResponse(@{@"posts":@[@{@"uri":@"at://did:plc:other/app.bsky.feed.post/test",@"author":@{@"did":@"did:plc:other"},@"record":@{@"text":@"old account target"}}]},nil,nil);
+ if(!canceled || succeeded || networkCalls!=requestsBeforeSwitch)return 12;
+ puts("PASS: stale AppView responses/fallbacks and linked-card hydration rejected, including A-B-A; current response delivered");
 }return 0;}
 '''
 r=Path(os.environ.get('NFB_OBJC_TEST_RUNTIME','/tmp/nfb-objc-test-runtime'))
 p=r/'account-switch.m';p.write_text(head+body+tail)
-subprocess.run(['clang','-Wno-objc-property-implementation','-fblocks','-fobjc-exceptions','-fconstant-string-class=NSConstantString','-I'+str(r/'usr/include'),str(p),'-L'+str(r/'usr/lib'),'-Wl,-rpath,'+str(r/'usr/lib'),'-L/usr/lib/swift/lib/swift/linux','-Wl,-rpath,/usr/lib/swift/lib/swift/linux','-lBlocksRuntime','-lgnustep-base','-lobjc','-o',str(r/'account-switch')],check=True)
+subprocess.run(['clang','-Wno-objc-property-implementation','-fblocks','-fobjc-exceptions','-fconstant-string-class=NSConstantString','-I'+str(r/'usr/include'),'-I'+str(root),str(p),str(root/'NFBPostLinkResolver.m'),'-L'+str(r/'usr/lib'),'-Wl,-rpath,'+str(r/'usr/lib'),'-L/usr/lib/swift/lib/swift/linux','-Wl,-rpath,/usr/lib/swift/lib/swift/linux','-lBlocksRuntime','-lgnustep-base','-lobjc','-o',str(r/'account-switch')],check=True)
 subprocess.run([str(r/'account-switch')],check=True)

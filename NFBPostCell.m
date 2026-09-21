@@ -1,3 +1,4 @@
+#import "NFBRepostContext.h"
 #import "NFBPostCell.h"
 
 #import "NFBAtprotoClient.h"
@@ -12,6 +13,10 @@
 @interface NFBPostCell () <NFBMediaPreviewViewDelegate, NFBExternalCardViewDelegate, NFBQuotedPostViewDelegate>
 
 @property (nonatomic, strong) UILabel *reasonLabel;
+@property (nonatomic, strong) UIImageView *reasonIconView;
+@property (nonatomic, strong) NSLayoutConstraint *avatarReasonTopConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *reasonIconWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *reasonIconHeightConstraint;
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UIView *threadConnectorTopView;
 @property (nonatomic, strong) UIView *threadConnectorBottomView;
@@ -114,6 +119,10 @@
   self.tombstoneView.hidden = YES;
   self.contentStackTombstoneLeadingConstraint.active = NO;
   self.contentStackDefaultLeadingConstraint.active = YES;
+  self.avatarReasonTopConstraint.active = NO;
+  self.avatarTopConstraint.active = YES;
+  self.reasonIconView.hidden = YES;
+  self.reasonLabel.numberOfLines = 1;
   self.avatarTopConstraint.constant = NFBPostCellTopInset;
   self.avatarView.hidden = NO;
   self.actionsRow.hidden = NO;
@@ -138,6 +147,14 @@
   self.reasonLabel.translatesAutoresizingMaskIntoConstraints = NO;
   self.reasonLabel.font = NFBFont(13.0, NFBFontWeightBold);
   self.reasonLabel.textColor = NFBColorSecondaryText();
+  self.reasonLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  self.reasonLabel.userInteractionEnabled = YES;
+  [self.reasonLabel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(reposterTapped)]];
+  self.reasonIconView = [[UIImageView alloc] initWithImage:NFBTemplateIcon(@"nfb_retweet_context")];
+  self.reasonIconView.translatesAutoresizingMaskIntoConstraints = NO;
+  self.reasonIconView.contentMode = UIViewContentModeScaleAspectFit;
+  self.reasonIconView.tintColor = NFBColorSecondaryText();
+  self.reasonIconView.hidden = YES;
 
   self.avatarView = [[UIImageView alloc] initWithImage:[self.class placeholderAvatarImage]];
   self.avatarView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -356,6 +373,7 @@
   [self.contentView addSubview:self.threadConnectorBottomView];
   [self.contentView addSubview:self.avatarView];
   [self.contentView addSubview:contentStack];
+  [self.contentView addSubview:self.reasonIconView];
   [self.contentView addSubview:self.bottomBorder];
 
   self.mediaHeightConstraint = [self.mediaView.heightAnchor constraintEqualToAnchor:self.mediaView.widthAnchor multiplier:9.0 / 16.0];
@@ -363,6 +381,15 @@
   self.externalCardHeightConstraint = [self.externalCardView.heightAnchor constraintEqualToConstant:0.0];
   self.externalCardHeightConstraint.priority = UILayoutPriorityDefaultHigh;
   self.avatarTopConstraint = [self.avatarView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:NFBPostCellTopInset];
+  self.avatarReasonTopConstraint = [self.avatarView.topAnchor constraintEqualToAnchor:self.headerRow.topAnchor constant:2.0];
+  CGFloat badgeSize = NFBFont(15.0, NFBFontWeightRegular).pointSize;
+  self.reasonIconWidthConstraint = [self.reasonIconView.widthAnchor constraintEqualToConstant:badgeSize];
+  self.reasonIconHeightConstraint = [self.reasonIconView.heightAnchor constraintEqualToConstant:badgeSize];
+  [NSLayoutConstraint activateConstraints:@[
+    [self.reasonIconView.trailingAnchor constraintEqualToAnchor:self.avatarView.trailingAnchor constant:2.0],
+    [self.reasonIconView.centerYAnchor constraintEqualToAnchor:self.reasonLabel.centerYAnchor],
+    self.reasonIconWidthConstraint, self.reasonIconHeightConstraint
+  ]];
   self.bottomBorderLeadingConstraint = [self.bottomBorder.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor];
   self.contentStackDefaultLeadingConstraint = [contentStack.leadingAnchor constraintEqualToAnchor:self.avatarView.trailingAnchor constant:NFBPostCellAvatarTextGap];
   self.contentStackTombstoneLeadingConstraint = [contentStack.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:NFBPostCellHorizontalInset];
@@ -495,6 +522,12 @@
   if ([self.delegate respondsToSelector:@selector(postCellDidTapReply:)]) [self.delegate postCellDidTapReply:self];
 }
 
+- (void)reposterTapped {
+  if (NFBFeedReposter(self.feedItem) && [self.delegate respondsToSelector:@selector(postCellDidTapReposter:)]) {
+    [self.delegate postCellDidTapReposter:self];
+  }
+}
+
 - (void)repostTapped {
   if (self.tombstoned) return;
   NSDictionary *post = [NFBAtprotoClient postFromFeedItem:self.feedItem ?: @{}];
@@ -563,6 +596,9 @@
 - (void)applyTheme {
   NFBIPAApplyTableCellAppearance(self, UITableViewCellSelectionStyleNone);
   self.reasonLabel.textColor = NFBColorSecondaryText();
+  self.reasonIconView.tintColor = NFBColorSecondaryText();
+  self.reasonIconWidthConstraint.constant = NFBFont(15.0, NFBFontWeightRegular).pointSize;
+  self.reasonIconHeightConstraint.constant = self.reasonIconWidthConstraint.constant;
   self.threadConnectorTopView.backgroundColor = NFBIPAThreadRailColor();
   self.threadConnectorBottomView.backgroundColor = NFBIPAThreadRailColor();
   self.reasonLabel.font = NFBFont(13.0, NFBFontWeightBold);
@@ -682,6 +718,13 @@
 	  self.reasonLabel.attributedText = [rawReason isEqualToString:@"pinned"] ? [self pinnedReasonAttributedString] : nil;
 	  self.reasonLabel.text = [rawReason isEqualToString:@"pinned"] ? nil : reason;
 	  self.reasonLabel.hidden = reason.length == 0;
+  BOOL repostContext = NFBFeedReposter(item) != nil;
+  self.reasonIconView.hidden = !repostContext;
+  self.reasonLabel.numberOfLines = repostContext ? 2 : 1;
+  self.reasonLabel.accessibilityTraits = repostContext ? UIAccessibilityTraitButton : UIAccessibilityTraitStaticText;
+  self.avatarReasonTopConstraint.active = NO;
+  self.avatarTopConstraint.active = !repostContext;
+  self.avatarReasonTopConstraint.active = repostContext;
   self.avatarTopConstraint.constant = reason.length > 0 ? NFBPostCellReasonAvatarTopInset : NFBPostCellTopInset;
   self.tombstoned = tombstone.count > 0;
   if (self.tombstoned) {
@@ -698,9 +741,8 @@
   self.verifiedBadgeView.hidden = ![NFBAtprotoClient isProfileVerified:author];
   self.handleLabel.text = [@"@" stringByAppendingString:[NFBAtprotoClient handleForProfile:author]];
   self.timeLabel.text = [NFBAtprotoClient relativeTimeForPost:post];
-  NSString *bodyText = [NFBAtprotoClient textForPost:post];
-  self.bodyLabel.hidden = bodyText.length == 0;
   self.bodyLabel.attributedText = [self bodyAttributedStringForPost:post];
+  self.bodyLabel.hidden = self.bodyLabel.attributedText.length == 0;
   self.replyContextLabel.attributedText = [self replyContextAttributedStringForFeedItem:item post:post];
   self.replyContextLabel.hidden = self.replyContextLabel.attributedText.length == 0;
 
@@ -763,6 +805,9 @@
 }
 
 - (void)configureTombstone:(NSDictionary *)tombstone {
+  self.reasonIconView.hidden = YES;
+  self.avatarReasonTopConstraint.active = NO;
+  self.avatarTopConstraint.active = YES;
   self.reasonLabel.hidden = YES;
   self.reasonLabel.text = @"";
   self.contentStackDefaultLeadingConstraint.active = NO;

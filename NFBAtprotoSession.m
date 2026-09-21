@@ -1,3 +1,4 @@
+#import "NFBChatPermission.h"
 #import "NFBAtprotoSession.h"
 #import "NFBTokenRefreshPolicy.h"
 #import <CommonCrypto/CommonDigest.h>
@@ -1488,9 +1489,12 @@ allowProactiveRefresh:(BOOL)allowProactiveRefresh
             if (message.length == 0 && [value isKindOfClass:[NSDictionary class]] && [value[@"error_description"] isKindOfClass:[NSString class]]) message = value[@"error_description"];
             if (message.length == 0 && [value isKindOfClass:[NSDictionary class]] && [value[@"error"] isKindOfClass:[NSString class]]) message = value[@"error"];
             NSLog(@"NotTwitter ATProto error %ld host=%@ message=%@", (long)response.statusCode, request.URL.host ?: @"", message ?: @"ATProto request failed.");
+            NSMutableDictionary *errorInfo = [@{NSLocalizedDescriptionKey: message ?: @"ATProto request failed."} mutableCopy];
+            NSString *errorName = [value isKindOfClass:NSDictionary.class] && [value[@"error"] isKindOfClass:NSString.class] ? value[@"error"] : nil;
+            if (errorName.length > 0) errorInfo[NFBChatErrorNameKey] = errorName;
             NSError *statusError = [NSError errorWithDomain:@"NFBAtprotoSession"
                                                        code:response.statusCode
-                                                   userInfo:@{NSLocalizedDescriptionKey: message ?: @"ATProto request failed."}];
+                                                   userInfo:errorInfo];
             if (completion) completion(value, response, statusError);
             return;
         }

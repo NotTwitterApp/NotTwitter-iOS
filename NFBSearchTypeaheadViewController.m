@@ -1,3 +1,4 @@
+#import "NFBSearchOptions.h"
 #import "NFBSearchTypeaheadViewController.h"
 
 #import "NFBAtprotoClient.h"
@@ -765,6 +766,7 @@ static NSString *NFBSearchTrimmedString(NSString *value) {
 }
 
 - (void)searchRecentCellDidTapRemoveItem:(NSDictionary *)item {
+  if ([item[@"type"] isEqualToString:@"saved"]) { NFBSetSearchSaved(item[@"query"], NO); [self.tableView reloadData]; return; }
   [self.class removeRecentItem:item];
   self.recentItems = [self.class recentSearches];
   [self.tableView reloadData];
@@ -837,13 +839,14 @@ static NSString *NFBSearchTrimmedString(NSString *value) {
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
   (void)tableView;
-  return 1;
+  return self.query.length == 0 && NFBSavedSearches().count > 0 ? 2 : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
   (void)tableView;
   (void)section;
-  if (self.query.length == 0) return MAX((NSInteger)self.recentItems.count, 1);
+  if (self.query.length == 0 && section == 1) return NFBSavedSearches().count;
+  if (self.query.length == 0) return self.recentItems.count == 0 && NFBSavedSearches().count > 0 ? 0 : MAX((NSInteger)self.recentItems.count, 1);
 
   NSInteger count = 1;
   if ([self profileActorForCurrentQuery].length > 0) count += 1;
@@ -852,6 +855,11 @@ static NSString *NFBSearchTrimmedString(NSString *value) {
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+  if (self.query.length == 0 && indexPath.section == 1) {
+    NSString *query = NFBSavedSearches()[indexPath.row];
+    NFBSearchOptionCell *cell = [tableView dequeueReusableCellWithIdentifier:@"option" forIndexPath:indexPath]; cell.delegate = self;
+    [cell configureWithTitle:query iconName:@"nfb_search" item:@{@"type":@"saved", @"query":query} removeVisible:YES]; return cell;
+  }
   if (self.query.length == 0) {
     if (self.recentItems.count == 0) {
       NFBSearchEmptyCell *cell = [tableView dequeueReusableCellWithIdentifier:@"empty" forIndexPath:indexPath];
@@ -914,25 +922,26 @@ static NSString *NFBSearchTrimmedString(NSString *value) {
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
   (void)tableView;
   (void)section;
-  return self.query.length == 0 && self.recentItems.count > 0 ? 50.0 : CGFLOAT_MIN;
+  return self.query.length == 0 && (section == 1 || self.recentItems.count > 0) ? 50.0 : CGFLOAT_MIN;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
   (void)tableView;
   (void)section;
-  if (self.query.length > 0 || self.recentItems.count == 0) return nil;
+  if (self.query.length > 0 || (section == 0 && self.recentItems.count == 0)) return nil;
 
   UIView *header = [[UIView alloc] init];
   header.backgroundColor = NFBColorBackground();
 
   UILabel *title = [[UILabel alloc] init];
   title.translatesAutoresizingMaskIntoConstraints = NO;
-  title.text = @"Recent searches";
+  title.text = section == 1 ? @"Saved searches" : @"Recent searches";
   title.textColor = NFBColorText();
   title.font = NFBFont(20.0, NFBFontWeightHeavy);
 
   UIButton *clear = [NFBPillButton buttonWithType:UIButtonTypeCustom];
   clear.translatesAutoresizingMaskIntoConstraints = NO;
+  clear.hidden = section == 1;
   [clear setTitle:@"Clear" forState:UIControlStateNormal];
   NFBIPAApplyButtonAppearance(clear, NFBIPAButtonStyleText, NFBIPAButtonSizeCompact);
   clear.titleLabel.font = NFBFont(15.0, NFBFontWeightBold);
@@ -961,6 +970,7 @@ static NSString *NFBSearchTrimmedString(NSString *value) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
   (void)tableView;
+  if (self.query.length == 0 && indexPath.section == 1) { [self performSearchWithQuery:NFBSavedSearches()[indexPath.row]]; return; }
   if (self.query.length == 0) {
     if (self.recentItems.count == 0) return;
     NSDictionary *item = self.recentItems[(NSUInteger)indexPath.row];

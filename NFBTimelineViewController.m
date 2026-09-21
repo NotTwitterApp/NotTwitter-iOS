@@ -1,5 +1,15 @@
+#import "NFBSearchPagingScrollView.h"
+#import "NFBSearchPagingPolicy.h"
+#import "NFBAdvancedSearchViewController.h"
+#import "NFBSearchQuery.h"
+#import "NFBSearchOptions.h"
+#import "NFBSearchResultFilter.h"
+#import "NFBActorCell.h"
+#import "NFBRepostContext.h"
+#import "NFBChatPermission.h"
 #import "NFBTimelineViewController.h"
 #import "NFBFeedRoute.h"
+#import "NFBBookmarkSearch.h"
 
 #import "NFBAtprotoClient.h"
 #import "NFBActorListViewController.h"
@@ -629,7 +639,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 @end
 
-@interface NFBTimelineViewController () <UITableViewDataSource, UITableViewDelegate, UISearchResultsUpdating, UISearchBarDelegate, UIGestureRecognizerDelegate, NFBPostCellDelegate, NFBSearchTypeaheadViewControllerDelegate, NFBMediaViewerViewControllerDelegate>
+@interface NFBTimelineViewController () <UITableViewDataSource, UITableViewDelegate, UISearchResultsUpdating, UISearchBarDelegate, UIContextMenuInteractionDelegate, NFBActorCellDelegate, UIGestureRecognizerDelegate, NFBPostCellDelegate, NFBSearchTypeaheadViewControllerDelegate, NFBMediaViewerViewControllerDelegate>
 
 @property (nonatomic, assign) NFBTimelineKind kind;
 @property (nonatomic, copy, nullable) NSString *actor;
@@ -637,8 +647,29 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 @property (nonatomic, strong) UIRefreshControl *refreshControl;
 @property (nonatomic, assign) BOOL refreshSuccessSoundPending;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *items;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *bookmarkItems;
 @property (nonatomic, copy, nullable) NSString *cursor;
 @property (nonatomic, copy) NSString *searchQuery;
+@property (nonatomic) NFBSearchTab searchTab;
+@property (nonatomic) BOOL searchFollowingOnly;
+@property (nonatomic) NSUInteger searchEmptyPageCount;
+@property (nonatomic, strong) UISearchBar *searchResultsBar;
+@property (nonatomic, strong) UIView *searchTabsView;
+@property (nonatomic) BOOL searchPageContentOnly;
+@property (nonatomic, weak) NFBTimelineViewController *searchResultsHost;
+@property (nonatomic, strong) NFBSearchPagingScrollView *searchPager;
+@property (nonatomic, strong) UIScrollView *searchTabsScrollView;
+@property (nonatomic, copy) NSArray<NFBTimelineViewController *> *searchPages;
+@property (nonatomic) CGSize searchPagerLayoutSize;
+@property (nonatomic) BOOL searchHostAppeared;
+@property (nonatomic) BOOL searchPagingInteractionSuppressed;
+@property (nonatomic, strong) UIView *searchEmptyView;
+@property (nonatomic, strong) UILabel *searchEmptyTitle;
+@property (nonatomic, strong) UILabel *searchEmptySubtitle;
+@property (nonatomic, strong) UIView *searchTabUnderline;
+@property (nonatomic, copy) NSArray<UIButton *> *searchTabButtons;
+@property (nonatomic, strong) NSLayoutConstraint *searchUnderlineCenter;
+@property (nonatomic, strong) NSLayoutConstraint *searchUnderlineWidth;
 @property (nonatomic, copy) NSString *timelineTitleOverride;
 @property (nonatomic, copy) NSString *feedRouteActor;
 @property (nonatomic, copy) NSString *feedRouteRecordKey;
@@ -692,6 +723,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 @property (nonatomic, strong) UIButton *composeButton;
 @property (nonatomic, assign) NSUInteger owningAccountGeneration;
 @property (nonatomic, assign) NSUInteger accountChromeGeneration;
+@property (nonatomic, assign) NSUInteger profileMessageCapabilityGeneration;
+@property (nonatomic, assign) BOOL profileMessageOpening;
 @property (nonatomic, assign) BOOL searchResultsMode;
 @property (nonatomic, copy) NSString *selectedProfileTabID;
 @property (nonatomic, copy) NSString *selectedNotificationsTabID;
@@ -752,6 +785,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     _owningAccountGeneration = [NFBAtprotoSession sharedSession].accountGeneration;
     _actor = [actor copy];
     _items = [NSMutableArray array];
+    if (kind == NFBTimelineKindBookmarks) _bookmarkItems = [NSMutableArray array];
     _searchQuery = @"";
     _selectedProfileTabID = @"tweets";
     _selectedNotificationsTabID = @"all";
@@ -946,13 +980,15 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     self.extendedLayoutIncludesOpaqueBars = YES;
   }
   [self configureNavigation];
-  [self configureTableView];
+  if ([self isSearchResultsHost]) { [self configureSearchTabs]; [self configureSearchPager]; }
+  else [self configureTableView];
   [self configureFloatingComposeButtonIfNeeded];
 
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(themeChanged:) name:NFBThemeDidChangeNotification object:nil];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(feedListCacheInvalidated:) name:NFBAtprotoFeedListCacheDidInvalidateNotification object:nil];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(advancedNotificationFiltersChanged:) name:NFBNotificationAdvancedFiltersDidChangeNotification object:nil];
 
+  if ([self isSearchResultsHost]) return;
   if (self.kind == NFBTimelineKindHome) {
     [self loadHomeFeedTabs];
     [self refreshTimeline];
@@ -965,16 +1001,30 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
+  if (self.searchPager) {
+    [self loadSearchPagesNearIndex:self.searchTab];
+    self.searchPager.userInteractionEnabled = NO;
+    [self.searchPages[self.searchTab] beginAppearanceTransition:YES animated:animated];
+  }
   [self configurePushedBackButtonIfNeeded];
   [self configurePushedProfileBackButtonIfNeeded];
   [self restoreFloatingComposeButtonVisibility];
   if (self.kind == NFBTimelineKindProfile) self.profileNavigationAppearanceConfigured = NO;
   [self configureProfileNavigationAppearanceIfNeeded];
   [self updateFeedNavigationForScrollOffset];
+  if (self.kind == NFBTimelineKindProfile && self.profile) [self refreshProfileMessageCapabilityIfNeeded];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
   [super viewWillDisappear:animated];
+  if (self.searchPager) {
+    self.searchPager.panGestureRecognizer.enabled = NO;
+    [self.searchPager setContentOffset:CGPointMake(self.searchTab * CGRectGetWidth(self.searchPager.bounds), 0) animated:NO];
+    self.searchPager.panGestureRecognizer.enabled = YES;
+    [self setSearchPageInteractionEnabled:YES];
+    self.searchHostAppeared = NO;
+    [self.searchPages[self.searchTab] beginAppearanceTransition:NO animated:animated];
+  }
   [self dismissFeedResourceMenuAnimated:NO];
   [self finishFeedResourceDragPersisting:NO];
   if (self.kind == NFBTimelineKindProfile && self.navigationController) {
@@ -984,9 +1034,20 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)viewDidAppear:(BOOL)animated {
   [super viewDidAppear:animated];
+  if (self.searchPager) {
+    [self.searchPages[self.searchTab] endAppearanceTransition];
+    self.searchHostAppeared = YES;
+    self.searchPager.userInteractionEnabled = YES;
+  }
   if ([self requiresAuth] && ![[NFBAtprotoSession sharedSession] hasSession]) {
     NFBPresentBlueskyLoginIfNeeded();
   }
+}
+
+- (BOOL)shouldAutomaticallyForwardAppearanceMethods { return ![self isSearchResultsHost]; }
+- (void)viewDidDisappear:(BOOL)animated {
+  [super viewDidDisappear:animated];
+  if (self.searchPager) [self.searchPages[self.searchTab] endAppearanceTransition];
 }
 
 - (void)configureRootAccountAvatarButton {
@@ -1035,6 +1096,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
+  [self layoutSearchPager];
   if (self.feedMetadata && fabs(self.feedHeaderWidth - CGRectGetWidth(self.tableView.bounds)) > 0.5) [self updateFeedHeader];
   [self updateFeedNavigationForScrollOffset];
   [self restoreFloatingComposeButtonVisibility];
@@ -1051,6 +1113,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)configureNavigation {
+  if (self.searchPageContentOnly) return;
   self.navigationItem.leftBarButtonItem = nil;
   self.navigationItem.leftBarButtonItems = nil;
   self.navigationItem.rightBarButtonItem = nil;
@@ -1112,6 +1175,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
       self.navigationItem.leftBarButtonItem = NFBBackBarButtonItem(self, @selector(backTapped));
       self.navigationItem.hidesBackButton = YES;
     }
+    if (self.searchResultsMode) { [self configureSearchResultsNavigation]; return; }
     UISearchController *searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
     searchController.searchResultsUpdater = self;
     searchController.obscuresBackgroundDuringPresentation = NO;
@@ -1136,11 +1200,13 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     }
   }
 
-  if (self.kind == NFBTimelineKindFeeds) {
+  if (self.kind == NFBTimelineKindFeeds || self.kind == NFBTimelineKindBookmarks) {
     UISearchController *searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
     searchController.searchResultsUpdater = self;
     searchController.obscuresBackgroundDuringPresentation = NO;
-    searchController.searchBar.placeholder = @"Search Feeds";
+    searchController.searchBar.placeholder = self.kind == NFBTimelineKindBookmarks ? @"Search Bookmarks" : @"Search Feeds";
+    if (self.kind == NFBTimelineKindBookmarks) searchController.searchBar.accessibilityHint = @"Filter by text or author, for example from:username coffee.";
+    searchController.searchBar.text = self.searchQuery;
     searchController.searchBar.delegate = self;
     searchController.searchBar.searchBarStyle = UISearchBarStyleMinimal;
     searchController.searchBar.tintColor = NFBColorAccent();
@@ -1521,9 +1587,11 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
   if (self.kind == NFBTimelineKindHome || self.kind == NFBTimelineKindLists || self.kind == NFBTimelineKindFeeds) [self configureHomeTabsView];
   if (self.kind == NFBTimelineKindNotifications) [self configureNotificationsTabsView];
+  if (self.searchResultsMode) [self configureSearchEmptyState];
   [self.view addSubview:self.tableView];
   UILayoutGuide *guide = self.view.safeAreaLayoutGuide;
   NSLayoutYAxisAnchor *topAnchor = (self.kind == NFBTimelineKindHome || self.kind == NFBTimelineKindLists || self.kind == NFBTimelineKindFeeds) ? self.homeTabsView.bottomAnchor : (self.kind == NFBTimelineKindNotifications ? self.notificationsTabsView.bottomAnchor : (self.kind == NFBTimelineKindProfile ? self.view.topAnchor : guide.topAnchor));
+  if (self.searchPageContentOnly) topAnchor = self.view.topAnchor;
   [NSLayoutConstraint activateConstraints:@[
     [self.tableView.topAnchor constraintEqualToAnchor:topAnchor],
     [self.tableView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
@@ -1537,6 +1605,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)registerTimelineCellsForTableView:(UITableView *)tableView {
+  [tableView registerClass:[NFBActorCell class] forCellReuseIdentifier:@"searchActor"];
   [tableView registerClass:[NFBPostCell class] forCellReuseIdentifier:@"post"];
   [tableView registerClass:[NFBProfileResourceCell class] forCellReuseIdentifier:@"profileResource"];
   [tableView registerClass:[NFBTrendCell class] forCellReuseIdentifier:@"trend"];
@@ -1544,6 +1613,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)scrollToTopForTabSelection {
+  if (self.searchPager) { [self.searchPages[self.searchTab] scrollToTopForTabSelection]; return; }
   if (!self.isViewLoaded || !self.tableView) return;
   if (self.homeFeedPanTracking) [self cancelHomeFeedPan];
   CGFloat topOffsetY = -self.tableView.contentInset.top;
@@ -1637,6 +1707,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (BOOL)nfb_canPageHorizontallyWithVelocity:(CGPoint)velocity {
+  if (self.searchPager) return [self.searchPager nfb_canPageHorizontallyWithVelocity:velocity];
   if (!self.sectionPanGesture || self.sectionPanAnimating || self.sectionPanOverlay) return NO;
   NSInteger target = [self selectedSwipeSectionIndex] + (velocity.x < 0 ? 1 : -1);
   return target >= 0 && target < (NSInteger)[self swipeSectionTabs].count;
@@ -1705,6 +1776,311 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     self.sectionPanIncoming = nil;
     self.sectionPanAnimating = NO;
     self.suppressTimelineSelectionForSwipe = NO;
+  }];
+}
+
+- (BOOL)isSearchResultsHost { return self.searchResultsMode && !self.searchPageContentOnly; }
+
+- (void)configureSearchPager {
+  self.searchPager = [[NFBSearchPagingScrollView alloc] initWithFrame:CGRectZero];
+  self.searchPager.translatesAutoresizingMaskIntoConstraints = NO;
+  self.searchPager.pageCount = NFBSearchTabTitles().count;
+  self.searchPager.delegate = self;
+  [self.view addSubview:self.searchPager];
+  [NSLayoutConstraint activateConstraints:@[
+    [self.searchPager.topAnchor constraintEqualToAnchor:self.searchTabsView.bottomAnchor],
+    [self.searchPager.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+    [self.searchPager.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+    [self.searchPager.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
+  ]];
+  NSMutableArray *pages = [NSMutableArray array];
+  for (NSInteger index = 0; index < self.searchPager.pageCount; index++) {
+    NFBTimelineViewController *page = [[NFBTimelineViewController alloc] initWithSearchQuery:self.searchQuery];
+    page.searchPageContentOnly = YES;
+    page.searchResultsHost = self;
+    page.searchTab = index;
+    page.searchFollowingOnly = self.searchFollowingOnly;
+    [pages addObject:page];
+  }
+  self.searchPages = pages;
+}
+- (void)loadSearchPagesNearIndex:(NSInteger)index {
+  for (NSInteger neighbor = MAX(0, index - 1); neighbor <= MIN((NSInteger)self.searchPages.count - 1, index + 1); neighbor++) {
+    NFBTimelineViewController *page = self.searchPages[neighbor];
+    if (page.parentViewController != self) {
+      [self addChildViewController:page];
+      // Accessing the view starts only this page's independent first request.
+      [self.searchPager addSubview:page.view];
+      [page didMoveToParentViewController:self];
+    }
+    page.view.frame = CGRectMake(neighbor * CGRectGetWidth(self.searchPager.bounds), 0, CGRectGetWidth(self.searchPager.bounds), CGRectGetHeight(self.searchPager.bounds));
+    page.tableView.scrollsToTop = neighbor == self.searchTab;
+    page.tableView.userInteractionEnabled = !self.searchPagingInteractionSuppressed;
+    page.suppressTimelineSelectionForSwipe = self.searchPagingInteractionSuppressed;
+  }
+}
+- (void)layoutSearchPager {
+  if (!self.searchPager) return;
+  CGSize size = self.searchPager.bounds.size;
+  if (size.width <= 0) return;
+  BOOL resized = !CGSizeEqualToSize(size, self.searchPagerLayoutSize);
+  if (resized) {
+    self.searchPagerLayoutSize = size;
+    // A size change cancels a partial gesture at the committed category.
+    self.searchPager.panGestureRecognizer.enabled = NO;
+    self.searchPager.panGestureRecognizer.enabled = YES;
+    self.searchPager.contentSize = CGSizeMake(size.width * self.searchPages.count, size.height);
+    [self.searchPager setContentOffset:CGPointMake(self.searchTab * size.width, 0) animated:NO];
+    for (NSUInteger index = 0; index < self.searchPages.count; index++) {
+      NFBTimelineViewController *page = self.searchPages[index];
+      if (page.isViewLoaded) page.view.frame = CGRectMake(index * size.width, 0, size.width, size.height);
+    }
+    [self setSearchPageInteractionEnabled:YES];
+  }
+  [self loadSearchPagesNearIndex:self.searchTab];
+  [self updateSearchPageIndicator];
+}
+- (void)updateSearchPageIndicator {
+  if (!self.searchPager || !self.searchTabButtons.count) return;
+  CGFloat width = CGRectGetWidth(self.searchPager.bounds);
+  CGFloat progress = width > 0 ? self.searchPager.contentOffset.x / width : self.searchTab;
+  progress = MIN(self.searchTabButtons.count - 1, MAX(0, progress));
+  NSInteger first = (NSInteger)floor(progress), second = MIN(first + 1, (NSInteger)self.searchTabButtons.count - 1);
+  CGFloat fraction = progress - first;
+  UIButton *left = self.searchTabButtons[first], *right = self.searchTabButtons[second];
+  CGFloat x1 = [left convertPoint:CGPointMake(CGRectGetMidX(left.bounds), 0) toView:self.searchTabsView].x;
+  CGFloat x2 = [right convertPoint:CGPointMake(CGRectGetMidX(right.bounds), 0) toView:self.searchTabsView].x;
+  CGFloat w1 = MAX(28, [left.currentTitle sizeWithAttributes:@{NSFontAttributeName:left.titleLabel.font}].width);
+  CGFloat w2 = MAX(28, [right.currentTitle sizeWithAttributes:@{NSFontAttributeName:right.titleLabel.font}].width);
+  self.searchUnderlineCenter.constant = x1 + (x2 - x1) * fraction;
+  self.searchUnderlineWidth.constant = w1 + (w2 - w1) * fraction;
+  [self.searchTabsView layoutIfNeeded];
+}
+- (void)setSearchPageInteractionEnabled:(BOOL)enabled {
+  self.searchPagingInteractionSuppressed = !enabled;
+  for (NFBTimelineViewController *page in self.searchPages) {
+    if (!page.isViewLoaded) continue;
+    // Native page scrolling cancels a tap on the outgoing row/control.
+    page.tableView.userInteractionEnabled = enabled;
+    page.suppressTimelineSelectionForSwipe = !enabled;
+  }
+}
+- (void)finishSearchPaging {
+  if (!self.searchPager || self.searchPager.dragging || self.searchPager.decelerating) return;
+  NSInteger selected = NFBSearchSettledPageForOffset(self.searchPager.contentOffset.x, CGRectGetWidth(self.searchPager.bounds), self.searchPages.count);
+  if (selected != self.searchTab) {
+    NFBTimelineViewController *previous = self.searchPages[self.searchTab];
+    self.searchTab = selected;
+    [self loadSearchPagesNearIndex:selected];
+    if (self.searchHostAppeared) {
+      [previous beginAppearanceTransition:NO animated:YES]; [previous endAppearanceTransition];
+      [self.searchPages[selected] beginAppearanceTransition:YES animated:YES]; [self.searchPages[selected] endAppearanceTransition];
+    }
+  }
+  for (NFBTimelineViewController *page in self.searchPages) if (page.isViewLoaded) page.tableView.scrollsToTop = page.searchTab == self.searchTab;
+  [self setSearchPageInteractionEnabled:YES];
+  [self updateSearchTabs];
+  UIButton *selectedButton = self.searchTabButtons[self.searchTab];
+  CGRect frame = [selectedButton convertRect:selectedButton.bounds toView:self.searchTabsScrollView];
+  [self.searchTabsScrollView scrollRectToVisible:frame animated:NO];
+  [self updateSearchPageIndicator];
+}
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+  if (scrollView != self.searchPager) return;
+  [self setSearchPageInteractionEnabled:NO];
+}
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+  if (scrollView == self.searchPager && !decelerate) [self finishSearchPaging];
+}
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+  if (scrollView == self.searchPager) [self finishSearchPaging];
+}
+- (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
+  if (scrollView == self.searchPager) [self finishSearchPaging];
+}
+
+- (void)configureSearchEmptyState {
+  self.searchEmptyView = [[UIView alloc] init]; self.searchEmptyView.translatesAutoresizingMaskIntoConstraints = NO;
+  self.searchEmptyTitle = [[UILabel alloc] init]; self.searchEmptyTitle.numberOfLines = 0; self.searchEmptyTitle.font = NFBFont(31, NFBFontWeightHeavy);
+  self.searchEmptySubtitle = [[UILabel alloc] init]; self.searchEmptySubtitle.numberOfLines = 0; self.searchEmptySubtitle.font = NFBFont(15, NFBFontWeightRegular);
+  UIButton *settings = [UIButton buttonWithType:UIButtonTypeSystem]; [settings setTitle:@"Search settings" forState:UIControlStateNormal]; settings.tintColor = NFBColorAccent(); settings.titleLabel.font = NFBFont(15, NFBFontWeightBold); settings.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+  [settings addTarget:self action:@selector(searchSettingsTapped) forControlEvents:UIControlEventTouchUpInside];
+  UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[self.searchEmptyTitle, self.searchEmptySubtitle, settings]]; stack.translatesAutoresizingMaskIntoConstraints = NO; stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 8;
+  [self.searchEmptyView addSubview:stack]; [self.emptyStateView addSubview:self.searchEmptyView];
+  [NSLayoutConstraint activateConstraints:@[[self.searchEmptyView.leadingAnchor constraintEqualToAnchor:self.emptyStateView.leadingAnchor constant:32], [self.searchEmptyView.trailingAnchor constraintEqualToAnchor:self.emptyStateView.trailingAnchor constant:-32], [self.searchEmptyView.topAnchor constraintEqualToAnchor:self.emptyStateView.topAnchor constant:32], [stack.leadingAnchor constraintEqualToAnchor:self.searchEmptyView.leadingAnchor], [stack.trailingAnchor constraintEqualToAnchor:self.searchEmptyView.trailingAnchor], [stack.topAnchor constraintEqualToAnchor:self.searchEmptyView.topAnchor], [stack.bottomAnchor constraintEqualToAnchor:self.searchEmptyView.bottomAnchor], [settings.heightAnchor constraintEqualToConstant:44]]];
+  self.searchEmptyView.hidden = YES;
+}
+- (void)configureSearchResultsNavigation {
+  self.title = nil;
+  self.navigationItem.searchController = nil;
+  UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, 240, 36)];
+  bar.searchBarStyle = UISearchBarStyleMinimal;
+  bar.placeholder = @"Search Twitter"; bar.text = self.searchQuery; bar.delegate = self;
+  bar.tintColor = NFBColorAccent();
+  NFBIPAApplySearchTextFieldAppearance(bar.searchTextField, @"Search Twitter");
+  bar.searchTextField.backgroundColor = NFBColorElevatedBackground();
+  bar.searchTextField.layer.cornerRadius = 18; bar.searchTextField.clipsToBounds = YES;
+  self.searchResultsBar = bar;
+  self.navigationItem.titleView = bar;
+  UIBarButtonItem *filter = [[UIBarButtonItem alloc] initWithImage:NFBTemplateIcon(@"nfb_filter") style:UIBarButtonItemStylePlain target:self action:@selector(searchFiltersTapped)];
+  filter.accessibilityLabel = @"Search filters";
+  if (self.searchFollowingOnly) filter.image = NFBTemplateIcon(@"nfb_filter_filled");
+  self.navigationItem.rightBarButtonItem = filter;
+  // Saved search/settings actions live on the query's context menu, leaving the
+  // reference's compact back / search field / filter navigation row intact.
+  [bar addInteraction:[[UIContextMenuInteraction alloc] initWithDelegate:self]];
+}
+
+- (void)configureSearchTabs {
+  self.searchTabsView = [[UIView alloc] init]; self.searchTabsView.translatesAutoresizingMaskIntoConstraints = NO;
+  self.searchTabsView.backgroundColor = NFBColorBackground();
+  UIScrollView *scroll = [[UIScrollView alloc] init]; scroll.translatesAutoresizingMaskIntoConstraints = NO;
+  scroll.showsHorizontalScrollIndicator = NO;
+  scroll.scrollsToTop = NO; scroll.delegate = self; self.searchTabsScrollView = scroll;
+  UIStackView *stack = [[UIStackView alloc] init]; stack.translatesAutoresizingMaskIntoConstraints = NO;
+  stack.axis = UILayoutConstraintAxisHorizontal; stack.distribution = UIStackViewDistributionFillEqually;
+  NSMutableArray *buttons = [NSMutableArray array];
+  [NFBSearchTabTitles() enumerateObjectsUsingBlock:^(NSString *title, NSUInteger index, BOOL *stop) {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom]; button.tag = index;
+    [button setTitle:title forState:UIControlStateNormal];
+    button.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
+    [button addTarget:self action:@selector(searchTabTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:button]; [buttons addObject:button];
+    [button.widthAnchor constraintGreaterThanOrEqualToConstant:68].active = YES;
+  }];
+  self.searchTabButtons = buttons;
+  UIView *line = [[UIView alloc] init]; line.translatesAutoresizingMaskIntoConstraints = NO; line.backgroundColor = NFBColorBorder();
+  [self.view addSubview:self.searchTabsView]; [self.searchTabsView addSubview:scroll]; [scroll addSubview:stack]; [self.searchTabsView addSubview:line];
+  [NSLayoutConstraint activateConstraints:@[
+    [self.searchTabsView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+    [self.searchTabsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [self.searchTabsView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+    [self.searchTabsView.heightAnchor constraintEqualToConstant:48],
+    [scroll.leadingAnchor constraintEqualToAnchor:self.searchTabsView.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:self.searchTabsView.trailingAnchor],
+    [scroll.topAnchor constraintEqualToAnchor:self.searchTabsView.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:self.searchTabsView.bottomAnchor],
+    [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor], [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+    [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor], [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+    [stack.heightAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.heightAnchor], [stack.widthAnchor constraintGreaterThanOrEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+    [line.leadingAnchor constraintEqualToAnchor:self.searchTabsView.leadingAnchor], [line.trailingAnchor constraintEqualToAnchor:self.searchTabsView.trailingAnchor],
+    [line.bottomAnchor constraintEqualToAnchor:self.searchTabsView.bottomAnchor], [line.heightAnchor constraintEqualToConstant:1.0 / UIScreen.mainScreen.scale]
+  ]];
+  self.searchTabUnderline = [[UIView alloc] init]; self.searchTabUnderline.translatesAutoresizingMaskIntoConstraints = NO;
+  self.searchTabUnderline.backgroundColor = NFBColorAccent(); self.searchTabUnderline.layer.cornerRadius = 2;
+  [self.searchTabsView addSubview:self.searchTabUnderline];
+  [self.searchTabUnderline.heightAnchor constraintEqualToConstant:4].active = YES;
+  [self.searchTabUnderline.bottomAnchor constraintEqualToAnchor:self.searchTabsView.bottomAnchor].active = YES;
+  [self updateSearchTabs];
+
+}
+- (void)updateSearchTabs {
+  if (!self.searchTabsView) return;
+  self.searchTabsView.backgroundColor = NFBColorBackground();
+  for (UIButton *button in self.searchTabButtons) {
+    BOOL selected = button.tag == self.searchTab;
+    [button setTitleColor:selected ? NFBColorText() : NFBColorSecondaryText() forState:UIControlStateNormal];
+    button.titleLabel.font = NFBFont(15, selected ? NFBFontWeightHeavy : NFBFontWeightBold);
+    button.accessibilityTraits = UIAccessibilityTraitButton | (selected ? UIAccessibilityTraitSelected : 0);
+  }
+  UIButton *selected = self.searchTabButtons[self.searchTab];
+  self.searchUnderlineCenter.active = NO; self.searchUnderlineWidth.active = NO;
+  self.searchUnderlineCenter = [self.searchTabUnderline.centerXAnchor constraintEqualToAnchor:self.searchTabsView.leadingAnchor constant:[selected convertPoint:CGPointMake(CGRectGetMidX(selected.bounds), 0) toView:self.searchTabsView].x];
+  self.searchUnderlineWidth = [self.searchTabUnderline.widthAnchor constraintEqualToConstant:MAX(28, [selected.currentTitle sizeWithAttributes:@{NSFontAttributeName:selected.titleLabel.font}].width)];
+  self.searchUnderlineCenter.active = YES; self.searchUnderlineWidth.active = YES;
+  [self updateSearchPageIndicator];
+}
+- (void)searchTabTapped:(UIButton *)button {
+  if (!self.searchPager || self.searchPager.dragging || !self.searchHostAppeared) return;
+  NSInteger target = button.tag;
+  if (target < 0 || target >= (NSInteger)self.searchPages.count) return;
+  [self loadSearchPagesNearIndex:target];
+  [self setSearchPageInteractionEnabled:NO];
+  CGPoint offset = CGPointMake(target * CGRectGetWidth(self.searchPager.bounds), 0);
+  if (fabs(self.searchPager.contentOffset.x - offset.x) < 0.5) { [self finishSearchPaging]; return; }
+  [self.searchPager setContentOffset:offset animated:YES];
+}
+- (void)restartSearch {
+  if (self.searchPager) {
+    self.searchPager.panGestureRecognizer.enabled = NO;
+    [self.searchPager setContentOffset:CGPointMake(self.searchTab * CGRectGetWidth(self.searchPager.bounds), 0) animated:NO];
+    self.searchPager.panGestureRecognizer.enabled = YES;
+    [self setSearchPageInteractionEnabled:YES];
+    for (NFBTimelineViewController *page in self.searchPages) {
+      page.searchQuery = self.searchQuery; page.searchFollowingOnly = self.searchFollowingOnly;
+      if (page.isViewLoaded) [page restartSearch];
+    }
+    [self updateSearchTabs];
+    return;
+  }
+  ++self.timelineLoadGeneration;
+  self.loading = NO; self.searchEmptyPageCount = 0;
+  self.cursor = nil; [self.items removeAllObjects];
+  self.tableView.tableFooterView = nil;
+  [self.tableView reloadData]; [self.tableView setContentOffset:CGPointZero animated:NO];
+  [self refreshTimeline];
+}
+- (NSArray<NSDictionary *> *)filteredSearchItems:(NSArray<NSDictionary *> *)items {
+  NSMutableArray *filtered = [NSMutableArray array];
+  BOOL people = self.searchTab == NFBSearchTabPeople;
+  for (NSDictionary *item in items) {
+    if (NFBSearchResultMatches(item, people, self.searchFollowingOnly, self.searchTab, NFBSearchHidesSensitiveContent(), NFBSearchExcludesMutedAccounts()) && (people || NFBSearchCountsMatch(item[@"post"], self.searchQuery))) [filtered addObject:item];
+  }
+  return filtered;
+}
+- (void)continueFilteredSearchIfNeeded:(NSUInteger)pageCount {
+  if (!self.searchResultsMode) return;
+  if (pageCount > 0) self.searchEmptyPageCount = 0;
+  else self.searchEmptyPageCount++;
+  if (self.cursor.length > 0) {
+    UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem]; more.frame = CGRectMake(0, 0, CGRectGetWidth(self.tableView.bounds), 52);
+    [more setTitle:@"Show more results" forState:UIControlStateNormal]; more.tintColor = NFBColorAccent(); more.titleLabel.font = NFBFont(15, NFBFontWeightBold);
+    [more addTarget:self action:@selector(loadMoreSearchResults) forControlEvents:UIControlEventTouchUpInside];
+    self.tableView.tableFooterView = more;
+    if (pageCount == 0 && self.searchEmptyPageCount < 5) [self loadNextPageReplacing:NO];
+  } else self.tableView.tableFooterView = nil;
+}
+- (void)loadMoreSearchResults { self.searchEmptyPageCount = 0; [self loadNextPageReplacing:NO]; }
+- (void)advancedSearchTapped {
+  NFBAdvancedSearchViewController *advanced = [[NFBAdvancedSearchViewController alloc] initWithQuery:self.searchQuery];
+  __weak typeof(self) weakSelf = self;
+  advanced.search = ^(NSString *query) { if (![weakSelf ownsCurrentAccount]) return; [NFBSearchTypeaheadViewController addRecentSearchQuery:query]; [weakSelf performSearchQuery:query]; };
+  UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:advanced]; NFBApplyNavigationAppearance(nav);
+  [self presentViewController:nav animated:YES completion:nil];
+}
+- (void)searchFiltersTapped { [self presentSearchOptions:NO]; }
+- (void)searchSettingsTapped {
+  if (self.searchResultsHost) { [self.searchResultsHost searchSettingsTapped]; return; }
+  [self presentSearchOptions:YES];
+}
+- (void)presentSearchOptions:(BOOL)settings {
+  NFBSearchOptionsViewController *options = [[NFBSearchOptionsViewController alloc] initWithSettings:settings];
+  options.followingOnly = self.searchFollowingOnly;
+  options.query = self.searchQuery;
+  __weak typeof(self) weakSelf = self;
+  options.openAdvancedSearch = ^{ [weakSelf advancedSearchTapped]; };
+  options.openSettings = ^{ [weakSelf searchSettingsTapped]; };
+  options.applyFilters = ^(BOOL following) { weakSelf.searchFollowingOnly = following; [weakSelf configureSearchResultsNavigation]; [weakSelf restartSearch]; };
+  options.settingsChanged = ^{ [weakSelf restartSearch]; };
+  UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:options]; NFBApplyNavigationAppearance(nav);
+  [self presentViewController:nav animated:YES completion:nil];
+}
+- (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)interaction configurationForMenuAtLocation:(CGPoint)location {
+  __weak typeof(self) weakSelf = self;
+  return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
+    __strong typeof(weakSelf) strongSelf = weakSelf;
+    BOOL saved = [NFBSavedSearches() containsObject:strongSelf.searchQuery];
+    UIAction *save = [UIAction actionWithTitle:saved ? @"Remove from saved search" : @"Save search" image:NFBTemplateIcon(@"nfb_bookmark") identifier:nil handler:^(UIAction *action) { NFBSetSearchSaved(weakSelf.searchQuery, !saved); }];
+    UIAction *settings = [UIAction actionWithTitle:@"Search settings" image:NFBTemplateIcon(@"nfb_settings") identifier:nil handler:^(UIAction *action) { [weakSelf searchSettingsTapped]; }];
+    return [UIMenu menuWithTitle:@"" children:@[save, settings]];
+  }];
+}
+- (void)actorCellDidTapFollow:(NFBActorCell *)cell {
+  NSString *did = cell.profile[@"did"];
+  __weak typeof(self) weakSelf = self;
+  [[self postActionCoordinator] performFollowForProfile:cell.profile sourceView:cell.followButton completion:^(NSDictionary *profile, NSError *error) {
+    if (error || ![weakSelf ownsCurrentAccount] || weakSelf.searchTab != NFBSearchTabPeople) return;
+    for (NSUInteger index = 0; index < weakSelf.items.count; index++) {
+      if ([weakSelf.items[index][@"did"] isEqualToString:did]) { weakSelf.items[index] = profile; break; }
+    }
+    [weakSelf.tableView reloadData];
   }];
 }
 
@@ -2358,6 +2734,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)configureFloatingComposeButtonIfNeeded {
+  if (self.searchPageContentOnly) return;
   if (self.kind != NFBTimelineKindHome && self.kind != NFBTimelineKindSearch) return;
   if (self.composeButton) {
     [self restoreFloatingComposeButtonVisibility];
@@ -2386,6 +2763,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)restoreFloatingComposeButtonVisibility {
+  if (self.searchPageContentOnly) return;
   if (self.kind != NFBTimelineKindHome && self.kind != NFBTimelineKindSearch) return;
   if (!self.isViewLoaded) return;
   if (!self.composeButton || self.composeButton.superview != self.view) {
@@ -2409,6 +2787,12 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)refreshTimeline {
+  if (self.searchPager) { [self.searchPages[self.searchTab] refreshTimeline]; return; }
+  if (self.searchResultsMode) { ++self.timelineLoadGeneration; self.loading = NO; self.searchEmptyPageCount = 0; }
+  if (self.kind == NFBTimelineKindBookmarks && self.loading) {
+    [self.refreshControl endRefreshing];
+    return;
+  }
   if (self.refreshControl.isRefreshing) {
     self.refreshSuccessSoundPending = YES;
     NFBPlaySound(@"pull.aac");
@@ -2427,6 +2811,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
 
   if ([self requiresAuth] && ![[NFBAtprotoSession sharedSession] hasSession]) {
+    [self.bookmarkItems removeAllObjects];
     [self.items removeAllObjects];
     [self.tableView reloadData];
     self.refreshSuccessSoundPending = NO;
@@ -2438,7 +2823,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   if (self.kind == NFBTimelineKindSearch) [self updateSearchHeaderVisible:!self.searchResultsMode && self.searchQuery.length == 0];
 
   self.loading = YES;
-  [self updateEmptyState:self.hasLoadedOnce ? @"" : @"Loading..."];
+  [self updateEmptyState:(!self.hasLoadedOnce || ((self.kind == NFBTimelineKindBookmarks || self.searchResultsMode) && self.items.count == 0)) ? @"Loading..." : @""];
   NSString *nextCursor = replacing ? nil : self.cursor;
   NSUInteger requestGeneration = ++self.timelineLoadGeneration;
   NSString *requestProfileTabID = self.kind == NFBTimelineKindProfile ? (self.selectedProfileTabID ?: @"tweets") : @"";
@@ -2463,9 +2848,24 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
       if (shouldPlayRefreshSound) NFBPlaySound(@"refresh.aac");
       NSArray<NSDictionary *> *displayItems = strongSelf.kind == NFBTimelineKindNotifications ? [strongSelf groupedNotificationItemsFromItems:items ?: @[]] : (items ?: @[]);
-      if (replacing) [strongSelf.items removeAllObjects];
-      if (displayItems.count > 0) [strongSelf.items addObjectsFromArray:displayItems];
-      strongSelf.cursor = cursor;
+      if (strongSelf.searchResultsMode) displayItems = [strongSelf filteredSearchItems:displayItems];
+      if (strongSelf.kind == NFBTimelineKindBookmarks) {
+        if (replacing) [strongSelf.bookmarkItems removeAllObjects];
+        [strongSelf.bookmarkItems addObjectsFromArray:displayItems];
+        [strongSelf filterBookmarkItems];
+      } else {
+        if (replacing) [strongSelf.items removeAllObjects];
+        if (strongSelf.searchResultsMode) {
+          NSMutableSet *seen = [NSMutableSet set];
+          BOOL people = strongSelf.searchTab == NFBSearchTabPeople;
+          for (NSDictionary *existing in strongSelf.items) [seen addObject:(people ? existing[@"did"] : existing[@"post"][@"uri"]) ?: @""];
+          for (NSDictionary *item in displayItems) {
+            NSString *key = (people ? item[@"did"] : item[@"post"][@"uri"]) ?: @"";
+            if (key.length && ![seen containsObject:key]) { [strongSelf.items addObject:item]; [seen addObject:key]; }
+          }
+        } else if (displayItems.count > 0) [strongSelf.items addObjectsFromArray:displayItems];
+      }
+      strongSelf.cursor = ((strongSelf.kind == NFBTimelineKindBookmarks || strongSelf.searchResultsMode) && [cursor isEqualToString:nextCursor]) ? nil : cursor;
       if (strongSelf.kind == NFBTimelineKindHome) {
         NSNumber *key = [strongSelf homeFeedCacheKeyForIndex:strongSelf.selectedHomeFeedIndex];
         strongSelf.homeFeedItemsCache[key] = [strongSelf.items copy] ?: @[];
@@ -2488,6 +2888,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
         }];
       }
       if (strongSelf.kind == NFBTimelineKindHome && replacing) [strongSelf prefetchAdjacentHomeFeeds];
+      [strongSelf loadRemainingBookmarksForSearch];
+      [strongSelf continueFilteredSearchIfNeeded:displayItems.count];
     });
   };
 
@@ -2508,7 +2910,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     } else if (self.searchQuery.length == 0) {
       completion(@[], nil, nil);
     } else {
-      [[NFBAtprotoClient sharedClient] searchPosts:self.searchQuery cursor:nextCursor completion:completion];
+      if (self.searchTab == NFBSearchTabPeople) [[NFBAtprotoClient sharedClient] searchActors:self.searchQuery limit:25 cursor:nextCursor completion:completion];
+      else [[NFBAtprotoClient sharedClient] searchPosts:self.searchQuery sort:self.searchTab == NFBSearchTabLatest ? @"latest" : @"top" followingOnly:self.searchFollowingOnly mediaTab:self.searchTab cursor:nextCursor completion:completion];
     }
   } else if (self.kind == NFBTimelineKindNotifications) {
     [[NFBAtprotoClient sharedClient] fetchNotificationsWithCursor:nextCursor reasons:[self notificationReasonsForSelectedTab] completion:completion];
@@ -2599,12 +3002,16 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 - (NSString *)emptyMessageForCurrentView {
   if (self.kind == NFBTimelineKindSearch) {
     if (self.searchQuery.length == 0) return self.searchResultsMode ? @"No results found." : @"No trends right now.";
-    return @"No results found.";
+    if (self.cursor.length) return @"No matching results yet. Tap Show more results to keep searching.";
+    return [NSString stringWithFormat:@"No results for “%@”\n\nTry searching for something else, or check your search settings.", self.searchQuery];
   }
   if (self.kind == NFBTimelineKindNotifications) {
     return [self notificationEmptyStateSubtitle];
   }
-  if (self.kind == NFBTimelineKindBookmarks) return @"You haven't added any Tweets to your Bookmarks yet.";
+  if (self.kind == NFBTimelineKindBookmarks) {
+    if (self.searchQuery.length > 0) return @"No Bookmarks match your search.";
+    return @"You haven't added any Tweets to your Bookmarks yet.";
+  }
   if (self.kind == NFBTimelineKindLists) {
     NSDictionary *tab = [self currentHomeFeedTab];
     NSString *type = [tab[@"type"] isKindOfClass:NSString.class] ? tab[@"type"] : @"follow-lists";
@@ -3383,24 +3790,23 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   if (NFBProfileViewerIsBlocking(viewer) || NFBProfileViewerIsBlockedBy(viewer)) return NO;
   id resolved = self.profile[@"_nfbCanMessage"];
   if ([resolved isKindOfClass:NSNumber.class]) return [resolved boolValue];
-  NSString *followedBy = [viewer[@"followedBy"] isKindOfClass:NSString.class] ? viewer[@"followedBy"] : @"";
-  NSDictionary *associated = [self.profile[@"associated"] isKindOfClass:NSDictionary.class] ? self.profile[@"associated"] : @{};
-  NSDictionary *chat = [associated[@"chat"] isKindOfClass:NSDictionary.class] ? associated[@"chat"] : @{};
-  NSString *allowIncoming = [chat[@"allowIncoming"] isKindOfClass:NSString.class] ? chat[@"allowIncoming"] : @"";
-  if ([allowIncoming isEqualToString:@"none"]) return NO;
-  if ([allowIncoming isEqualToString:@"following"]) return followedBy.length > 0;
-  return [allowIncoming isEqualToString:@"all"];
+  return NO; // Match the reference: wait for the relationship/permission result.
 }
 
 - (void)refreshProfileMessageCapabilityIfNeeded {
   if (self.kind != NFBTimelineKindProfile || !self.profile || [self isCurrentProfileOwner]) return;
   NSString *profileDID = [self.profile[@"did"] isKindOfClass:NSString.class] ? self.profile[@"did"] : @"";
-  if (profileDID.length == 0) return;
+  if (profileDID.length == 0 || ![self ownsCurrentAccount]) return;
+  NSUInteger generation = ++self.profileMessageCapabilityGeneration;
+  NSMutableDictionary *pendingProfile = [self.profile mutableCopy];
+  [pendingProfile removeObjectForKey:@"_nfbCanMessage"];
+  self.profile = pendingProfile;
+  [self updateProfileHeader];
   __weak typeof(self) weakSelf = self;
   [[NFBAtprotoClient sharedClient] canMessageProfile:self.profile completion:^(BOOL canMessage) {
     dispatch_async(dispatch_get_main_queue(), ^{
       __strong typeof(weakSelf) strongSelf = weakSelf;
-      if (!strongSelf || strongSelf.kind != NFBTimelineKindProfile) return;
+      if (!strongSelf || ![strongSelf ownsCurrentAccount] || strongSelf.kind != NFBTimelineKindProfile || generation != strongSelf.profileMessageCapabilityGeneration) return;
       NSString *currentDID = [strongSelf.profile[@"did"] isKindOfClass:NSString.class] ? strongSelf.profile[@"did"] : @"";
       if (![currentDID isEqualToString:profileDID]) return;
       BOOL current = [strongSelf profileCanMessage];
@@ -3478,6 +3884,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
   if (elements.message) {
     UIButton *message = [self profileIconButtonWithIcon:@"nfb_messages" accessibilityLabel:@"Message"];
+    // Reference TFNButton size class 2: 18pt image inside a 34pt circle.
+    message.imageEdgeInsets = UIEdgeInsetsMake(8.0, 8.0, 8.0, 8.0);
     [message addTarget:self action:@selector(profileMessageTapped) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:message];
   }
@@ -3876,18 +4284,28 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)profileMessageTapped {
-  if ([[NFBAtprotoSession sharedSession] hasSession] && ![self profileElements].message) return;
+  if (self.profileMessageOpening || ![self ownsCurrentAccount]) return;
   if (![[NFBAtprotoSession sharedSession] hasSession]) {
     NFBPresentBlueskyLoginIfNeeded();
     return;
   }
   NSString *did = [self.profile[@"did"] isKindOfClass:NSString.class] ? self.profile[@"did"] : @"";
   if (did.length == 0 || [did isEqualToString:[NFBAtprotoSession sharedSession].did ?: @""]) return;
+  self.profileMessageOpening = YES;
   [[NFBAtprotoClient sharedClient] fetchChatConversationForMembers:@[did] completion:^(NSDictionary *value, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
+      self.profileMessageOpening = NO;
+      if (![self ownsCurrentAccount] || ![self.profile[@"did"] isEqual:did]) return;
       if (error || !value) {
+        if (NFBChatErrorIsPermissionDenied(error)) {
+          self.profileMessageCapabilityGeneration++;
+          NSMutableDictionary *updated = [self.profile mutableCopy];
+          updated[@"_nfbCanMessage"] = @NO;
+          self.profile = updated;
+          [self updateProfileHeader];
+        }
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Messages"
-                                                                       message:error.localizedDescription ?: @"Could not open that conversation."
+                                                                       message:NFBChatErrorIsPermissionDenied(error) ? @"Sorry! You cannot message this account." : (error.localizedDescription ?: @"Could not open that conversation.")
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -4100,6 +4518,13 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)updateEmptyState:(NSString *)message {
   BOOL loading = [message isEqualToString:@"Loading..."];
+  BOOL searchEmpty = self.searchResultsMode && !loading && self.items.count == 0 && [message isEqualToString:[self emptyMessageForCurrentView]];
+  self.searchEmptyView.hidden = !searchEmpty;
+  if (searchEmpty) {
+    self.searchEmptyTitle.text = self.cursor.length ? @"Keep searching" : [NSString stringWithFormat:@"No results for “%@”", self.searchQuery];
+    self.searchEmptySubtitle.text = self.cursor.length ? @"No matches in these results. Tap Show more results to keep searching." : @"Try searching for something else, or check your search settings to see if they’re protecting you from potentially sensitive content.";
+    self.searchEmptyTitle.textColor = NFBColorText(); self.searchEmptySubtitle.textColor = NFBColorSecondaryText();
+  }
   self.emptyLoadingView.hidden = !loading;
   self.emptyLabel.attributedText = nil;
   if (!loading && [self isNotificationEmptyStateMessage:message]) {
@@ -4107,7 +4532,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   } else {
     self.emptyLabel.text = loading ? @"" : message;
   }
-  self.emptyLabel.hidden = loading || message.length == 0;
+  self.emptyLabel.hidden = loading || searchEmpty || message.length == 0;
   if (loading) NFBStartLoadingAnimation(self.emptyLoadingView);
   else NFBStopLoadingAnimation(self.emptyLoadingView);
 }
@@ -4165,6 +4590,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   self.notificationsTabsBorder.backgroundColor = NFBColorBorder();
   [self updateHomeTabsSelection];
   [self updateNotificationsTabSelection];
+  [self updateSearchTabs];
   self.composeButton.backgroundColor = NFBColorAccent();
   if ([self.navigationController isKindOfClass:UINavigationController.class]) {
     NFBApplyNavigationAppearance(self.navigationController);
@@ -4235,14 +4661,43 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }];
 }
 
+- (void)filterBookmarkItems {
+  NSDictionary *query = NFBParseBookmarkSearch(self.searchQuery);
+  [self.items removeAllObjects];
+  for (NSDictionary *item in self.bookmarkItems) {
+    NSDictionary *post = [NFBAtprotoClient postFromFeedItem:item];
+    if (NFBBookmarkPostMatchesSearch(post, query)) {
+      [self.items addObject:item];
+    }
+  }
+}
+
+- (void)loadRemainingBookmarksForSearch {
+  if (self.kind != NFBTimelineKindBookmarks || self.searchQuery.length == 0 || self.loading || self.cursor.length == 0) return;
+  [self loadNextPageReplacing:NO];
+}
+
 - (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
   self.searchQuery = searchController.searchBar.text ?: @"";
+  if (self.kind == NFBTimelineKindBookmarks) {
+    self.searchQuery = [self.searchQuery stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    [self filterBookmarkItems];
+    [self.tableView reloadData];
+    [self updateEmptyState:self.items.count > 0 ? @"" : (self.loading ? @"Loading..." : [self emptyMessageForCurrentView])];
+    [self loadRemainingBookmarksForSearch];
+    return;
+  }
   if (self.kind == NFBTimelineKindFeeds && self.selectedHomeFeedIndex != 1) return;
   [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(refreshTimeline) object:nil];
   [self performSelector:@selector(refreshTimeline) withObject:nil afterDelay:0.35];
 }
 
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+  if (self.kind == NFBTimelineKindBookmarks) [searchBar resignFirstResponder];
+}
+
 - (BOOL)searchBarShouldBeginEditing:(UISearchBar *)searchBar {
+  if (self.kind == NFBTimelineKindBookmarks) return YES;
   if (self.kind == NFBTimelineKindFeeds) {
     if (self.selectedHomeFeedIndex != 1) [self switchToHomeFeedIndex:1 direction:0 animated:NO];
     return YES;
@@ -4253,7 +4708,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)presentSearchTypeahead {
-  NSString *initialQuery = self.navigationItem.searchController.searchBar.text ?: self.searchQuery ?: @"";
+  NSString *initialQuery = self.searchResultsMode ? self.searchQuery : (self.navigationItem.searchController.searchBar.text ?: self.searchQuery ?: @"");
   NFBSearchTypeaheadViewController *search = [[NFBSearchTypeaheadViewController alloc] initWithInitialQuery:initialQuery];
   search.delegate = self;
   search.modalPresentationStyle = UIModalPresentationFullScreen;
@@ -4269,6 +4724,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     return;
   }
   self.searchQuery = trimmed;
+  if (self.searchResultsMode) { self.searchResultsBar.text = trimmed; [self restartSearch]; return; }
   UISearchController *searchController = self.navigationItem.searchController;
   searchController.searchBar.text = trimmed;
   [searchController.searchBar resignFirstResponder];
@@ -4971,6 +5427,9 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
   NSArray<NSDictionary *> *items = [self itemsForTableView:tableView];
   NSDictionary *item = indexPath.row < (NSInteger)items.count ? items[(NSUInteger)indexPath.row] : @{};
+  if (self.searchResultsMode && self.searchTab == NFBSearchTabPeople) {
+    NFBActorCell *cell = [tableView dequeueReusableCellWithIdentifier:@"searchActor" forIndexPath:indexPath]; cell.delegate = self; [cell configureWithProfile:item]; return cell;
+  }
   if ([item[@"type"] isEqualToString:@"trend"]) {
     NFBTrendCell *cell = [tableView dequeueReusableCellWithIdentifier:@"trend" forIndexPath:indexPath];
     [cell configureWithTrend:item];
@@ -5010,6 +5469,13 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 #pragma mark - UITableViewDelegate
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+  if (scrollView == self.searchPager) {
+    NSInteger page = NFBSearchPageForOffset(scrollView.contentOffset.x, CGRectGetWidth(scrollView.bounds), self.searchPages.count);
+    [self loadSearchPagesNearIndex:page];
+    [self updateSearchPageIndicator];
+    return;
+  }
+  if (scrollView == self.searchTabsScrollView) { [self updateSearchPageIndicator]; return; }
   if (scrollView == self.homeFeedPreviewTableView) return;
   if (scrollView == self.tableView) [self updateFeedNavigationForScrollOffset];
   [self updateProfileNavigationForScrollOffset];
@@ -5031,6 +5497,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
   if (indexPath.row < 0 || indexPath.row >= (NSInteger)self.items.count) return;
   NSDictionary *item = self.items[(NSUInteger)indexPath.row];
+  if (self.searchResultsMode && self.searchTab == NFBSearchTabPeople) { [[self postActionCoordinator] performGoToProfile:item]; return; }
   if ([item[@"type"] isEqualToString:@"trend"]) {
     [self searchForTrend:item];
     return;
@@ -5167,6 +5634,17 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [self removeDeletedPost:originalPost];
     return;
   }
+  if (self.kind == NFBTimelineKindBookmarks) {
+    for (NSUInteger index = 0; index < self.bookmarkItems.count; index++) {
+      NSDictionary *item = self.bookmarkItems[index];
+      NSDictionary *post = [NFBAtprotoClient postFromFeedItem:item];
+      if ([post[@"uri"] isEqual:targetURI]) self.bookmarkItems[index] = [self feedItem:item byReplacingPost:updatedPost];
+    }
+    [self filterBookmarkItems];
+    [self.tableView reloadData];
+    [self updateEmptyState:self.items.count == 0 ? [self emptyMessageForCurrentView] : @""];
+    return;
+  }
   NSMutableArray<NSIndexPath *> *reloadPaths = [NSMutableArray array];
   for (NSUInteger index = 0; index < self.items.count; index++) {
     NSDictionary *item = self.items[index];
@@ -5271,6 +5749,16 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [self refreshTimeline];
     return;
   }
+  if (self.kind == NFBTimelineKindBookmarks) {
+    NSIndexSet *bookmarkIndexes = [self.bookmarkItems indexesOfObjectsPassingTest:^BOOL(NSDictionary *item, NSUInteger idx, BOOL *stop) {
+      return [[NFBAtprotoClient postFromFeedItem:item][@"uri"] isEqual:targetURI];
+    }];
+    [self.bookmarkItems removeObjectsAtIndexes:bookmarkIndexes];
+    [self filterBookmarkItems];
+    [self.tableView reloadData];
+    [self updateEmptyState:self.items.count == 0 ? [self emptyMessageForCurrentView] : @""];
+    return;
+  }
   NSMutableArray<NSIndexPath *> *paths = [NSMutableArray array];
   NSIndexSet *indexes = [self.items indexesOfObjectsPassingTest:^BOOL(NSDictionary *item, NSUInteger idx, BOOL *stop) {
     (void)idx;
@@ -5361,6 +5849,14 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)postCellDidLongPress:(NFBPostCell *)cell {
   [[self postActionCoordinator] presentMoreMenuForPost:[NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}] sourceView:nil];
+}
+
+- (void)postCellDidTapReposter:(NFBPostCell *)cell {
+  NSDictionary *reposter = NFBFeedReposter(cell.feedItem);
+  NSString *actor = [reposter[@"did"] isKindOfClass:NSString.class] ? reposter[@"did"] : reposter[@"handle"];
+  if (![actor isKindOfClass:NSString.class] || actor.length == 0) return;
+  NFBTimelineViewController *profile = [[NFBTimelineViewController alloc] initWithKind:NFBTimelineKindProfile actor:actor];
+  [self.navigationController pushViewController:profile animated:YES];
 }
 
 - (void)postCellDidTapAuthor:(NFBPostCell *)cell {

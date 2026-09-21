@@ -1,3 +1,4 @@
+#import "NFBPostLinkResolver.h"
 #import "NFBTheme.h"
 
 #import "NFBNeoFreeBirdUI.h"
@@ -1086,7 +1087,7 @@ static NSURL *NFBURLForFacetFeature(NSDictionary *feature, NSString *token, NSSt
 }
 
 static NSDictionary *NFBDisplayTextAndLinksForPost(NSDictionary *post) {
-  NSDictionary *record = [post[@"record"] isKindOfClass:NSDictionary.class] ? post[@"record"] : @{};
+  NSDictionary *record = NFBPostDisplayRecord(post);
   NSString *text = [record[@"text"] isKindOfClass:NSString.class] ? record[@"text"] : @"";
   NSArray *facets = [record[@"facets"] isKindOfClass:NSArray.class] ? record[@"facets"] : @[];
   if (text.length == 0 || facets.count == 0) return NFBDisplayTextAndLinksByShorteningURLs(text);

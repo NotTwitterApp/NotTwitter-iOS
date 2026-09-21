@@ -66,6 +66,7 @@ const icons = {
   nfb_captions: 'closedcaptioning_stroke.svg',
   nfb_reply: 'reply_stroke.svg',
   nfb_retweet: 'retweet_stroke.svg',
+  nfb_retweet_context: 'retweet.svg',
   nfb_pin: 'pin.svg',
   nfb_like: 'heart_stroke.svg',
   nfb_like_filled: 'heart.svg',
@@ -74,6 +75,7 @@ const icons = {
 
   nfb_settings: 'settings_stroke.svg',
   nfb_info: 'help_circle.svg',
+  nfb_conversation_info: 'information_circle.svg',
   nfb_close: 'close.svg',
   nfb_arrow_left: 'arrow_left.svg',
   nfb_new_message: 'compose_dm.svg',

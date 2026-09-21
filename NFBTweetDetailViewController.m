@@ -682,6 +682,7 @@
   self.verifiedBadgeView.hidden = ![NFBAtprotoClient isProfileVerified:author];
   [NFBPostActionCoordinator configureFollowButton:self.followButton profile:author overDarkBackground:NO];
   self.bodyLabel.attributedText = [self bodyAttributedStringForPost:self.post];
+  self.bodyLabel.hidden = self.bodyLabel.attributedText.length == 0;
   self.footerLabel.text = [self footerTextForPost:self.post];
 
   NSNumber *repostCount = [self numberFromPostKey:@"repostCount"];

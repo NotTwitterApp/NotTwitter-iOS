@@ -239,9 +239,8 @@
   self.handleLabel.text = [@"@" stringByAppendingString:[NFBAtprotoClient handleForProfile:author]];
   self.timeLabel.text = [@"· " stringByAppendingString:[NFBAtprotoClient relativeTimeForPost:post]];
 
-  NSString *text = [NFBAtprotoClient textForPost:post];
   self.bodyLabel.attributedText = NFBTweetBodyAttributedStringForPost(post, self.bodyLabel.font);
-  self.bodyLabel.hidden = text.length == 0;
+  self.bodyLabel.hidden = self.bodyLabel.attributedText.length == 0;
 
   NSArray<NSDictionary *> *mediaItems = NFBModerationMediaItemsByApplyingWarnings([NFBAtprotoClient mediaItemsForPost:post], post);
   self.mediaItems = mediaItems;

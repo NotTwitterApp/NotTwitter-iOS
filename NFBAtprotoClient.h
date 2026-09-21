@@ -35,6 +35,9 @@ typedef void (^NFBAtprotoDictionaryCompletion)(NSDictionary *_Nullable value, NS
 - (void)fetchCurrentUserListsForKind:(NSString *)kind completion:(NFBAtprotoArrayCompletion)completion;
 - (void)fetchStarterPacksForActor:(NSString *)actor cursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
 - (void)searchPosts:(NSString *)query cursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
+- (void)searchPosts:(NSString *)query sort:(NSString *)sort followingOnly:(BOOL)following mediaTab:(NSInteger)mediaTab cursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
+- (void)searchPosts:(NSString *)query sort:(NSString *)sort cursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
+- (void)searchActors:(NSString *)query limit:(NSUInteger)limit cursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
 - (void)searchActors:(NSString *)query limit:(NSUInteger)limit completion:(NFBAtprotoArrayCompletion)completion;
 - (void)searchMessageableActors:(NSString *)query limit:(NSUInteger)limit completion:(NFBAtprotoArrayCompletion)completion;
 - (void)fetchTrendingTopicsWithCompletion:(NFBAtprotoArrayCompletion)completion;
@@ -48,6 +51,7 @@ typedef void (^NFBAtprotoDictionaryCompletion)(NSDictionary *_Nullable value, NS
 - (void)fetchChatConversationsWithCursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
 - (void)fetchChatConversationRequestsWithCursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
 - (void)fetchChatConversationWithID:(NSString *)conversationID completion:(NFBAtprotoDictionaryCompletion)completion;
+- (void)fetchChatConversationAvailabilityForMembers:(NSArray<NSString *> *)members completion:(NFBAtprotoDictionaryCompletion)completion;
 - (void)fetchChatConversationForMembers:(NSArray<NSString *> *)members completion:(NFBAtprotoDictionaryCompletion)completion;
 - (void)createChatGroupWithMembers:(NSArray<NSString *> *)members name:(NSString *)name completion:(NFBAtprotoDictionaryCompletion)completion;
 - (void)addChatMembersToConversationID:(NSString *)conversationID members:(NSArray<NSString *> *)members completion:(NFBAtprotoDictionaryCompletion)completion;

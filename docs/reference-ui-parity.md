@@ -534,3 +534,228 @@ and USB installation succeeded. A fresh device app inventory confirms version
 IPA SHA-256: `315092a4e717875a64fd2b14725b59972b737f5083b2fd9641b3749395554e48`.
 Logs: `/tmp/nfb-build142-final-build.log`, `/tmp/nfb-build142-install.log`,
 `/tmp/nfb-build142-phone-apps.json`.
+
+## Retweet context and DM permissions — build 147
+
+The reference is the supplied `Twitter_9.67_decrypted.ipa`. Its T1Twitter and
+TwitterSPMMigration binaries match the extracted binaries byte for byte.
+`TFNTwitterStatus(T1StatusViewModel) socialBadgeName` (0x13ad94, retweet branch
+at 0x13b06c) resolves `rt` to **retweet**, not `retweet_stroke`.
+The header now uses a separately generated icon from that reference vector;
+the action-bar icon retains its own asset. `T1TimelinesItemSocialContextView`
+uses `smallBoldFont` (0x4d5158) and a badge square equal to `normalFont.pointSize`
+(0x4d51b8): 13pt text and 15pt badge at the normal scale. The social-context
+layout at 0x2171ec caps text at two lines and puts the badge's right edge two
+points beyond the avatar's right edge (0x2177b0). Text aligns with the Tweet's
+author column. The avatar follows the text's actual height, including larger
+font settings and long names.
+
+Reference localization keys `SOCIAL_CONTEXT_FOLLOW_AND_RETWEETS_LABEL` and
+`SOCIAL_CONTEXT_YOU_RETWEET_LABEL` supply the forms “%@ Retweeted” and
+“You Retweeted”. Feed/profile `reasonRepost.by` supplies that person's identity;
+notification reason strings, ordinary posts, and quoted Tweets do not become
+retweet banners. Tapping the banner opens the reposter's profile.
+
+`T1ProfileActionDirectMessageButtonProvider` (0x5d6e84) waits for a ready
+relationship, checks `viewerCanDM`, and excludes blocks in either direction.
+The button uses `messages_stroke` (0x5d6b24); the native vector matches the IPA.
+Size class 2 uses an 18pt image and 8pt insets (tables at 0x2cc9f10 /
+0x2cc9ee8), correcting the envelope inside the existing 34pt circle.
+The app now waits for Bluesky's read-only `getConvoAvailability.canChat` before
+showing the envelope. This delegates `allowIncoming` all/none/following,
+recipient-follows-sender direction, and existing-conversation exceptions to the
+chat service, matching Bluesky's own profile button. Unknown/malformed replies
+and request failures never default to everyone being allowed to message.
+Own profiles and individual/list blocks remain excluded. Account and request
+generations prevent late responses from restoring stale permissions.
+
+Opening a direct conversation checks availability again, returns an existing
+conversation when allowed, and only creates one after a positive result.
+Structured error names survive the session layer, so closed/blocked-recipient
+errors use the IPA's `DIRECT_MESSAGE_ERROR_CANNOT_SEND_DIRECT_MESSAGE` copy
+instead of raw server text. Network/authentication errors remain distinct.
+An existing direct conversation with `canChat=false`, or a send rejected for
+permission, hides the composer, retains its draft, and shows the reference's
+`DIRECT_MESSAGES_READ_ONLY_FOOTER_MESSAGE` with a Bluesky Learn more link.
+The footer uses native themed text; it is an adaptation of the reference copy,
+not a proven pixel-identical reproduction of every reference footer variant.
+
+Primary protocol/UI sources checked for this change:
+- [Bluesky profile DM button](https://github.com/bluesky-social/social-app/blob/main/src/components/dms/MessageProfileButton.tsx)
+- [Conversation availability](https://github.com/bluesky-social/atproto/blob/main/lexicons/chat/bsky/convo/getConvoAvailability.json)
+- [Direct conversation and permission errors](https://github.com/bluesky-social/atproto/blob/main/lexicons/chat/bsky/convo/getConvoForMembers.json)
+- [Chat declaration settings](https://github.com/bluesky-social/atproto/blob/main/lexicons/chat/bsky/actor/declaration.json)
+
+Validation: `python3 tests/chat-permission-runtime.py` runs the production
+permission/opening methods against a controlled Foundation chat proxy. It covers
+all/none/following/unknown declaration fixtures with authoritative service
+responses, blocks, self, network/malformed errors, reusing existing chats,
+preventing creation on denial, permission changes between checking and creation,
+account switches, named errors, and retweet labels/identities. The profile
+visibility C checks also pass. These checks send no live messages or create test
+conversations. Compilation and packaged-asset checks complement these tests;
+full on-phone visual and gesture comparison against the reference is unverified.
+
+Delivery: the final arm64 build completed without compiler warnings/errors and
+USB installation succeeded. A fresh installation-proxy lookup confirms version
+`1.0`, build `147`, bundle `XTL-3SKNP9V5W8.com.nottwitter.atproto` on iPhone
+`00008160-0016642A36400036`. The packaged retweet context PNG matches the generated
+reference asset; the IPA includes the structured repost and chat availability
+paths. SHA-256: `f256da2e177fe6ea62aea0f9d415f1e1d5eb7230a73d767b11ce4d61c41010a2`.
+Logs: `/tmp/nfb-147-final-build.log`, `/tmp/nfb-147-install.log`,
+`/tmp/nfb-147-phone-version.json`.
+
+## Search navigation and filters — 1.1 build 149
+
+Inspected the supplied `Twitter_9.67_decrypted.ipa` again before this change:
+
+- `T1SearchContainerViewControllerContext makeSearchResultsViewControllerWithScribeContext:searchParameters:viewController:subtitleAction:` at `0x1ce374` constructs the five Top, Latest, People, Photos, Videos configurations.
+- `TTSSearchContainerViewController _t1_rightBarButtonItems` at `0x60fb64` uses the filter bar item in the ordinary mode; advanced search is feature-switch controlled. `_t1_presentFilterMenu:` at `0x610c78` presents Search filters with Cancel and initially disabled Apply.
+- `TTSSearchFiltersViewController initWithContext:` at `0x614084` builds People (From anyone / People you follow) and Location (Anywhere / Near you) single-selection sections.
+- The reference localization supplies the saved-search actions and advanced builder's Add search condition, phrase/word/account/date/count/reply labels. The generated filter icon's source SVG matches the IPA bytes.
+
+Search results now have the compact back/search/filter navigation row, five underlined tabs, tap/swipe tab selection, paged actor rows with Follow controls, filtered native media results, the filter sheet, saved searches in typeahead, and Search settings. The optional advanced builder supports adding/deleting word, exact phrase, any/without-word, author, mention, hashtag, date, count, following, media/link and reply conditions. End dates entered through that builder are inclusive and become the next day's exclusive `until` boundary. Saved searches and search settings are scoped to the active account. Photo/video result content uses the app's existing tweet/media renderer.
+
+The backend is `app.bsky.feed.searchPostsV2`: `top` versus `recent`, repeated `authors`/`mentions`/`hashtags`, dates, following, media/video and reply filters use its typed parameters. Operators inside quoted phrases remain literal. Short default usernames expand to `.bsky.social`; `from:me` resolves to the active DID. Minimum engagement and media-or-link conditions filter hydrated results. Photos exclude video-only posts and quoted-only media. Sparse filtered pages continue automatically for up to five pages before offering Show more results; duplicate items and immediately repeated cursors are suppressed. Query/tab/filter changes invalidate in-flight responses and reset pagination.
+
+Bluesky's V2 schema has no geographic search or recipient-account filter equivalent to the reference's Near me / To accounts conditions. Near you remains visibly unavailable in the normal Location section, and those unsupported advanced conditions are not offered. Saved searches are local to this app, not Twitter or Bluesky server-synced. Existing account moderation continues to apply when search-specific sensitive/mute filtering is disabled. Pixel-exact media layouts, current server-side Twitter feature flags, and full on-device visual parity are not claimed.
+
+Validation:
+
+- `python3 tests/search-runtime.py` executes the production query/filter helpers and API methods with controlled responses: quoted operators, author exclusions and mentions, typed Boolean/array parameters, media classification, follow direction, content settings, engagement thresholds, cursors, response decoding and errors pass.
+- Fresh optimized arm64 IPA build completed without compiler warnings/errors. Version 1.1/build 149 was inspected inside the IPA, copied to `/home/eric/Documents/Not Twitter/Not Twitter 1.1 (Build 149).ipa` with matching SHA-256, installed over USB, and verified through the phone's installation proxy.
+- Live V2 Top, Photos, Videos and author requests returned five hydrated posts each. Video and author membership checks passed. The unauthenticated live next-page request returned HTTP 403; cursor forwarding/decoding is covered by the controlled runtime checks. Authenticated live pagination and follow-filter results were not inspected on the phone.
+- `idevicescreenshot` could not start the phone's screenshot service (developer disk image unavailable), so no on-device screenshot comparison was performed.
+
+API sources: [searchPostsV2 lexicon](https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/feed/searchPostsV2.json), [searchActors lexicon](https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/actor/searchActors.json).
+
+## Search category paging — 1.1 build 150
+
+Replaced build 149's two discrete `UISwipeGestureRecognizer`s with a horizontal,
+`pagingEnabled` scroll view containing independent result controllers. Pages and
+the tab underline now track the finger continuously; UIKit owns the release,
+snap-back and deceleration physics, as in the reference. A committed tab keeps
+its loaded rows, pagination cursor and vertical position when leaving/returning.
+The current and neighboring pages load lazily; query/filter changes invalidate
+requests for all loaded pages without mixing their result types.
+
+Reference evidence in TwitterSPMMigration from the supplied 9.67 IPA:
+
+- `TFNPagingViewController viewDidLoad` (`0x7fba80`, setup at `0x7fbcc8`–`0x7fbd24`) enables native paging, disables scroll-to-top/indicators on the horizontal scroller, and enables failure beyond both outer extents. There is no custom release-distance cutoff in `scrollViewWillEndDragging:withVelocity:targetContentOffset:` (`0x7fd578`).
+- `TFNPagingScrollView _tfn_panGestureRecognizerShouldBegin` (`0x7fb4ec`) requires `abs(vx) > 2 * abs(vy)` and rejects outward motion at the first/last page.
+- `gestureRecognizerShouldBegin:` (`0x7fb22c`) cancels vertical descendant pans when horizontal paging wins. Its simultaneous-recognition method (`0x7fb3b8`) allows a vertical scroller while the pager is still possible, not after the pager begins/changes. `shouldRequireFailureOfGestureRecognizer:` (`0x7fb49c`) defers to the screen-edge recognizer.
+- `indexPathForContentOffset:` (`0x7ff12c`) truncates `offset / (pageWidth + spacing)` while tracking. The app follows that indexing for gesture arbitration and uses the settled native page boundary for the final category selection.
+
+The native app also preserves slider, zoomed-media and horizontal-carousel
+priority. Navigation's full-width back gesture yields to a category page when a
+previous category exists; at Top the outward drag can go back. Screen-edge back
+remains available from every category. A size change or leaving the screen
+cancels any partial page at the committed category. Only the selected result
+list responds to status-bar scroll-to-top. Child appearance and row-interaction
+state follow page completion, including a cancelled/returned native scroll.
+
+Validation: optimized arm64 build; `tests/search-paging-policy.c` tests the exact
+2:1 threshold, both extent failures, tracking/settled indexes and size bounds;
+`tests/search-paging-runtime.py` executes the production recognizer and nested
+scroll arbitration methods with deterministic UIKit doubles (including vertical
+fling cancellation, media/slider priority and edge/full-width back);
+`tests/gesture-policy.c` and `tests/search-runtime.py` also pass. These checks do
+not simulate UIKit's native scrolling physics or prove on-device visual parity.
+
+Delivery: 1.1/build 150 was verified inside the packaged IPA and on the connected
+iPhone through installation-proxy lookup after a successful USB installation.
+The copy in `/home/eric/Documents/Not Twitter/Not Twitter 1.1 (Build 150).ipa`
+matches the package SHA-256
+`1ffeff6de6dc371d89cf621d3347ae488a3cf9f973c67947d182d3a3f68c3776`.
+The reference's edge-failure class pointer at `0x3882950` was additionally
+resolved through chained import 3971 to `UIScreenEdgePanGestureRecognizer`.
+No on-device gesture recording or screenshot comparison was available.
+
+
+## Message pagination and back swipes (1.1 build 151)
+
+History prefetch starts 240–480pt from the top depending on viewport height.
+Responses anchor the first visible message by ID at response time, including
+its offset within that row. Reading can continue while loading; prepends,
+shared-post hydration, and removing the paging header preserve that anchor.
+Inbox/request pagination continues through short or locally filtered pages,
+keeps older loaded conversations on refresh, and preserves the visible row.
+Both pagers expose loading/retry controls, reject cursor cycles, and isolate
+late responses by account and request generation. A truncated cache never
+retains a cursor from beyond omitted rows; history caches keep the newest 500
+messages. The getLog fallback no longer supplies a cursor to getMessages.
+
+Reference `TwitterSPMMigration` evidence:
+
+- `TFNNavigationControllerTransitionAnimator gestureRecognizerShouldBegin:`
+  at `0x8dce94` accepts the full-width pan when horizontal velocity points back
+  and `abs(vy / vx) <= 1`; it cancels descendant vertical scroll pans.
+- `_pan:` at `0x8dc88c` normalizes translation and velocity for RTL. Its release
+  branch at `0x8dca08`–`0x8dca50` cancels for velocity below -200pt/s; otherwise
+  finishes for progress >=0.6 or velocity >=200pt/s, unless cancelled. Completion
+  speed is 0.99 and the completion curve is ease-in-out.
+- The initializer at `0x8dac74` stores a 0.4s transition duration. The app's
+  full-width transition now follows these values, retains interaction state
+  through completion/cancellation, stops the active vertical list, and protects
+  media controls, category paging, modal presentation and the native edge pop.
+- `information_circle.svg` from the IPA's main TwitterAppearance bundle is
+  byte-identical to the bundled source used for `nfb_conversation_info` (24pt).
+  Conversation Info now uses it instead of the question-mark help icon.
+
+Validation: `tests/chat-pagination-runtime.py` executes production callbacks
+with delayed transport responses: reading while loading, duplicate/empty/cyclic
+pages, retries, both refresh/page completion orders, account/request isolation,
+and newest-message cache truncation. `tests/back-swipe-runtime.py` executes
+production gesture handlers with UIKit doubles, including transition lifetime,
+vertical scrolling takeover, media/modal conflicts and RTL. The back-swipe C
+boundary tests and existing search-paging runtime checks pass. These are focused
+control-flow tests, not on-device animation or screenshot parity evidence.
+
+Delivery: optimized arm64 1.1/build 151 compiled without warnings, installed
+successfully over USB, and installation-proxy lookup confirmed Not Twitter
+1.1/build 151. The Documents IPA matches the packaged build:
+`/home/eric/Documents/Not Twitter/Not Twitter 1.1 (Build 151).ipa`, SHA-256
+`dfe72d3d8f922515a011b3a5cd012f47846ff1518e8fc71caa2235b975e2ac1a`.
+The packaged information icon was verified against the generated source asset.
+Release notes were updated alongside the IPA. No live on-device gesture or
+message-scrolling session was performed.
+
+
+## Linked post cards (1.1 build 152)
+
+Bluesky `/profile/{actor}/post/{rkey}` and Not Twitter `/{user}/status/{id}`
+and `/tweet/{id}` URLs resolve to existing `NFBQuotedPostView` tweet components.
+Not Twitter IDs follow `twitter-clone/src/lib/routes.ts` (base64url AT URIs),
+including the GitHub Pages path prefixes. DM discovery uses the same parser.
+Feed, bookmark, search, and thread API responses receive a presentation-only
+linked-post field before layout. A native quote always takes precedence;
+otherwise one linked tweet is displayed per source post, with other links kept.
+Card taps use existing native quote navigation and media interactions.
+
+Handle resolution and post fetches are deduplicated and batched at 25, per the
+[getProfiles lexicon](https://raw.githubusercontent.com/bluesky-social/atproto/main/lexicons/app/bsky/actor/getProfiles.json)
+and [getPosts lexicon](https://raw.githubusercontent.com/bluesky-social/atproto/main/lexicons/app/bsky/feed/getPosts.json).
+Raw preview lookups avoid recursive hydration and preserve authenticated block
+state. Self-links, missing/deleted/blocked targets and lookup errors retain the
+original link. Account-generation checks cover both the initial response and
+preview resolution. No posting or record writes occur during resolution.
+
+A separate display record removes only the resolved URL and remaps UTF-8 facet
+indices, preserving mentions, unrelated links, Unicode, and the original record
+for copy/edit operations. A matching website preview is suppressed. In messages,
+only the represented post link is hidden; remaining web links remain tappable.
+
+Validation: `tests/post-link-resolver-runtime.py` compiles the production resolver
+and extracts production DM discovery/display helpers. It covers both share URL
+formats, strict hosts/routes, batching/deduplication, no recursive resolution,
+native quote/self-link handling, immutable records, UTF-8 facet remapping,
+multiple links and error/blocked fallbacks. Account-switch runtime tests also
+cover a switch during linked-card resolution. Existing search and chat-pagination
+runtime tests pass. Visual behavior has not been checked in a live phone session.
+
+Delivery: arm64 1.1/build 152 compiled without warnings and was successfully
+installed over USB. Installation-proxy lookup confirmed Not Twitter 1.1/build
+152. The Documents copy matches the packaged IPA at
+`/home/eric/Documents/Not Twitter/Not Twitter 1.1 (Build 152).ipa`, SHA-256
+`cf15f2b64e6f3075146178f7602edfced8460ae00c564497cb037a6cea633199`.
+The packaged binary contains the linked-post resolver and display-record keys.

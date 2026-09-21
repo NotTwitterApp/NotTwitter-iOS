@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)postCellDidTapMore:(NFBPostCell *)cell;
 - (void)postCellDidLongPress:(NFBPostCell *)cell;
 - (void)postCellDidTapAuthor:(NFBPostCell *)cell;
+- (void)postCellDidTapReposter:(NFBPostCell *)cell;
 - (void)postCell:(NFBPostCell *)cell didTapLinkURL:(NSURL *)url;
 - (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index;
 - (void)postCellDidTapExternalCard:(NFBPostCell *)cell;

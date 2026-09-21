@@ -1,5 +1,10 @@
+#import "NFBPostLinkResolver.h"
+#import "NFBPostLink.h"
+#import "NFBSearchQuery.h"
 #import "NFBAtprotoClient.h"
 #import "NFBProfilePresentation.h"
+#import "NFBRepostContext.h"
+#import "NFBChatPermission.h"
 #import "NFBMediaAttachmentPolicy.h"
 
 #import "NFBAtprotoSession.h"
@@ -119,6 +124,7 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableArray *> *threadPendingCompletions;
 
 - (void)fetchAppViewGET:(NSString *)method params:(NSDictionary *)params requiresAuth:(BOOL)requiresAuth completion:(NFBAtprotoValueCompletion)completion;
+- (void)fetchRawAppViewGET:(NSString *)method params:(NSDictionary *)params requiresAuth:(BOOL)requiresAuth completion:(NFBAtprotoValueCompletion)completion;
 - (void)fetchFeedGeneratorViewsForURIs:(NSArray<NSString *> *)uris completion:(void (^)(NSDictionary<NSString *, NSDictionary *> *generatorsByURI))completion;
 - (void)fetchFeedGeneratorViewsForURIs:(NSArray<NSString *> *)uris offset:(NSUInteger)offset generatorsByURI:(NSMutableDictionary<NSString *, NSDictionary *> *)generatorsByURI completion:(void (^)(NSDictionary<NSString *, NSDictionary *> *generatorsByURI))completion;
 - (void)fetchSavedFeedItemsWithCompletion:(void (^)(NSArray<NSDictionary *> *items, NSArray *preferences, NSError *error))completion;
@@ -127,8 +133,6 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 - (void)fetchPostViewsForURIs:(NSArray<NSString *> *)uris completion:(void (^)(NSDictionary<NSString *, NSDictionary *> *postsByURI, NSError *error))completion;
 - (void)fetchPostViewsForURIs:(NSArray<NSString *> *)uris offset:(NSUInteger)offset postsByURI:(NSMutableDictionary<NSString *, NSDictionary *> *)postsByURI firstError:(NSError *)firstError completion:(void (^)(NSDictionary<NSString *, NSDictionary *> *postsByURI, NSError *error))completion;
 - (void)fetchProfileRecordForDID:(NSString *)did completion:(void (^)(NSDictionary *record))completion;
-- (void)fetchChatDeclarationForDID:(NSString *)did completion:(void (^)(NSString *allowIncoming))completion;
-- (void)fetchRelationshipFromActorDID:(NSString *)actorDID otherDID:(NSString *)otherDID completion:(void (^)(NSDictionary *relationship))completion;
 - (void)filterMessageableActors:(NSArray<NSDictionary *> *)actors limit:(NSUInteger)limit completion:(NFBAtprotoArrayCompletion)completion;
 - (void)messagePermissionForProfile:(NSDictionary *)profile completion:(void (^)(BOOL canMessage, BOOL followsViewer))completion;
 - (void)fetchChatLogMessagesForConversationID:(NSString *)conversationID cursor:(NSString *)cursor remainingPages:(NSUInteger)remainingPages messagesByID:(NSMutableDictionary<NSString *, NSDictionary *> *)messagesByID nextCursor:(NSString *)nextCursor completion:(NFBAtprotoArrayCompletion)completion;
@@ -1006,18 +1010,25 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 }
 
 - (void)searchPosts:(NSString *)query cursor:(NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion {
+  [self searchPosts:query sort:@"latest" cursor:cursor completion:completion];
+}
+
+- (void)searchPosts:(NSString *)query sort:(NSString *)sort cursor:(NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion {
+  [self searchPosts:query sort:sort followingOnly:NO mediaTab:0 cursor:cursor completion:completion];
+}
+- (void)searchPosts:(NSString *)query sort:(NSString *)sort followingOnly:(BOOL)following mediaTab:(NSInteger)mediaTab cursor:(NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion {
   NSString *trimmed = [query stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   if (trimmed.length == 0) {
     if (completion) completion(@[], nil, nil);
     return;
   }
 
-  NSMutableDictionary *params = [@{@"q": trimmed, @"limit": @"50"} mutableCopy];
+  NSMutableDictionary *params = [NFBSearchRequestParameters(trimmed, sort, following, mediaTab, [NFBAtprotoSession sharedSession].did) mutableCopy];
   if (cursor.length > 0) params[@"cursor"] = cursor;
 
-  [self fetchAppViewGET:@"app.bsky.feed.searchPosts"
+  [self fetchAppViewGET:@"app.bsky.feed.searchPostsV2"
                  params:params
-           requiresAuth:NO
+           requiresAuth:[[NFBAtprotoSession sharedSession] hasSession]
              completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
     (void)response;
     if (error) {
@@ -1035,6 +1046,10 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 }
 
 - (void)searchActors:(NSString *)query limit:(NSUInteger)limit completion:(NFBAtprotoArrayCompletion)completion {
+  [self searchActors:query limit:limit cursor:nil completion:completion];
+}
+
+- (void)searchActors:(NSString *)query limit:(NSUInteger)limit cursor:(NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion {
   NSString *trimmed = [query stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   if (trimmed.length == 0) {
     if (completion) completion(@[], nil, nil);
@@ -1042,8 +1057,10 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   }
 
   NSUInteger clampedLimit = MIN(MAX(limit, (NSUInteger)1), (NSUInteger)25);
+  NSMutableDictionary *params = [@{@"q": trimmed, @"limit": @(clampedLimit)} mutableCopy];
+  if (cursor.length > 0) params[@"cursor"] = cursor;
   [self fetchAppViewGET:@"app.bsky.actor.searchActors"
-                 params:@{@"q": trimmed, @"limit": @(clampedLimit)}
+                 params:params
            requiresAuth:[[NFBAtprotoSession sharedSession] hasSession]
              completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
     (void)response;
@@ -1440,68 +1457,18 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 - (void)messagePermissionForProfile:(NSDictionary *)profile completion:(void (^)(BOOL canMessage, BOOL followsViewer))completion {
   NSString *viewerDID = [NFBAtprotoSession sharedSession].did ?: @"";
   NSString *targetDID = NFBClientStringValue(profile[@"did"]);
-  if (viewerDID.length == 0 || targetDID.length == 0 || [viewerDID isEqualToString:targetDID]) {
-    if (completion) completion(NO, NO);
-    return;
-  }
-
   NSDictionary *viewer = [profile[@"viewer"] isKindOfClass:NSDictionary.class] ? profile[@"viewer"] : @{};
-  BOOL locallyFollowsViewer = [NFBClientStringValue(viewer[@"followedBy"]) length] > 0;
-  BOOL locallyBlocked = NFBProfileViewerIsBlocking(viewer) || NFBProfileViewerIsBlockedBy(viewer);
-  if (locallyBlocked) {
+  if (viewerDID.length == 0 || targetDID.length == 0 || [viewerDID isEqualToString:targetDID] ||
+      NFBProfileViewerIsBlocking(viewer) || NFBProfileViewerIsBlockedBy(viewer)) {
     if (completion) completion(NO, NO);
     return;
   }
-
-  BOOL (^relationshipIsBlocked)(NSDictionary *) = ^BOOL(NSDictionary *relationship) {
-    return NFBProfileViewerIsBlocking(relationship) || NFBProfileViewerIsBlockedBy(relationship) ||
-           NFBProfileViewerIsBlocking(viewer) || NFBProfileViewerIsBlockedBy(viewer);
-  };
-
-  void (^resolveWithAllowIncoming)(NSString *) = ^(NSString *allowIncoming) {
-    if (![allowIncoming isEqualToString:@"none"] &&
-        ![allowIncoming isEqualToString:@"following"] &&
-        ![allowIncoming isEqualToString:@"all"]) {
-      allowIncoming = @"all";
-    }
-    if ([allowIncoming isEqualToString:@"none"]) {
-      if (completion) completion(NO, NO);
-      return;
-    }
-    if ([allowIncoming isEqualToString:@"all"]) {
-      if (locallyFollowsViewer) {
-        if (completion) completion(YES, YES);
-        return;
-      }
-      [self fetchRelationshipFromActorDID:targetDID otherDID:viewerDID completion:^(NSDictionary *relationship) {
-        BOOL blocked = relationshipIsBlocked(relationship);
-        BOOL targetFollowsViewer = [NFBClientStringValue(relationship[@"following"]) length] > 0;
-        if (completion) completion(!blocked, targetFollowsViewer && !blocked);
-      }];
-      return;
-    }
-    if (locallyFollowsViewer) {
-      if (completion) completion(YES, YES);
-      return;
-    }
-
-    [self fetchRelationshipFromActorDID:targetDID otherDID:viewerDID completion:^(NSDictionary *relationship) {
-      BOOL targetFollowsViewer = [NFBClientStringValue(relationship[@"following"]) length] > 0;
-      BOOL blocked = relationshipIsBlocked(relationship);
-      if (completion) completion(targetFollowsViewer && !blocked, targetFollowsViewer && !blocked);
-    }];
-  };
-
-  NSDictionary *associated = [profile[@"associated"] isKindOfClass:NSDictionary.class] ? profile[@"associated"] : @{};
-  NSDictionary *chat = [associated[@"chat"] isKindOfClass:NSDictionary.class] ? associated[@"chat"] : @{};
-  NSString *associatedAllowIncoming = NFBClientStringValue(chat[@"allowIncoming"]);
-  if (associatedAllowIncoming.length > 0) {
-    resolveWithAllowIncoming(associatedAllowIncoming);
-    return;
-  }
-
-  [self fetchChatDeclarationForDID:targetDID completion:^(NSString *allowIncoming) {
-    resolveWithAllowIncoming(allowIncoming);
+  // The chat service accounts for declarations (all/none/following), the
+  // recipient following the sender, and exceptions for existing conversations.
+  // Missing declarations or lookup failures must never become permission.
+  [self fetchChatConversationAvailabilityForMembers:@[targetDID] completion:^(NSDictionary *value, NSError *error) {
+    BOOL allowed = !error && NFBChatAvailabilityAllowsMessaging(value);
+    if (completion) completion(allowed, allowed && NFBProfileRelationshipPresent(viewer[@"followedBy"]));
   }];
 }
 
@@ -1523,23 +1490,58 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   }];
 }
 
-- (void)fetchChatConversationForMembers:(NSArray<NSString *> *)members completion:(NFBAtprotoDictionaryCompletion)completion {
+- (void)fetchChatConversationAvailabilityForMembers:(NSArray<NSString *> *)members completion:(NFBAtprotoDictionaryCompletion)completion {
   NSArray<NSString *> *dids = NFBClientUniqueNonEmptyStrings(members);
   if (dids.count == 0) {
     if (completion) completion(nil, [NSError errorWithDomain:@"NFBAtprotoClient" code:60 userInfo:@{NSLocalizedDescriptionKey: @"Choose someone to message."}]);
     return;
   }
-
-  [[NFBAtprotoSession sharedSession] xrpcGETViaChatProxy:@"chat.bsky.convo.getConvoForMembers"
+  NSUInteger generation = [NFBAtprotoSession sharedSession].accountGeneration;
+  [[NFBAtprotoSession sharedSession] xrpcGETViaChatProxy:@"chat.bsky.convo.getConvoAvailability"
                                                   params:@{@"members": dids}
                                               completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
     (void)response;
-    if (error || ![value isKindOfClass:NSDictionary.class]) {
-      if (completion) completion(nil, error ?: [NSError errorWithDomain:@"NFBAtprotoClient" code:61 userInfo:@{NSLocalizedDescriptionKey: @"Could not open that conversation."}]);
+    if (generation != [NFBAtprotoSession sharedSession].accountGeneration) {
+      if (completion) completion(nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
       return;
     }
-    NSDictionary *convo = [value[@"convo"] isKindOfClass:NSDictionary.class] ? value[@"convo"] : (NSDictionary *)value;
-    if (completion) completion(convo, nil);
+    if (error || ![value isKindOfClass:NSDictionary.class] || ![value[@"canChat"] isKindOfClass:NSNumber.class]) {
+      if (completion) completion(nil, error ?: [NSError errorWithDomain:@"NFBAtprotoClient" code:61 userInfo:@{NSLocalizedDescriptionKey: @"Could not check messaging availability. Please try again."}]);
+      return;
+    }
+    if (completion) completion(value, nil);
+  }];
+}
+
+- (void)fetchChatConversationForMembers:(NSArray<NSString *> *)members completion:(NFBAtprotoDictionaryCompletion)completion {
+  NSArray<NSString *> *dids = NFBClientUniqueNonEmptyStrings(members);
+  NSUInteger generation = [NFBAtprotoSession sharedSession].accountGeneration;
+  // Check again on entry: the profile or recipient-picker state may be stale.
+  [self fetchChatConversationAvailabilityForMembers:dids completion:^(NSDictionary *availability, NSError *error) {
+    if (error || !NFBChatAvailabilityAllowsMessaging(availability)) {
+      if (completion) completion(nil, error ?: NFBChatPermissionDeniedError());
+      return;
+    }
+    NSDictionary *existing = [availability[@"convo"] isKindOfClass:NSDictionary.class] ? availability[@"convo"] : nil;
+    if (NFBClientStringValue(existing[@"id"]).length > 0) {
+      if (completion) completion(existing, nil);
+      return;
+    }
+    if (generation != [NFBAtprotoSession sharedSession].accountGeneration) {
+      if (completion) completion(nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
+      return;
+    }
+    [[NFBAtprotoSession sharedSession] xrpcGETViaChatProxy:@"chat.bsky.convo.getConvoForMembers"
+                                                    params:@{@"members": dids}
+                                                completion:^(id value, NSHTTPURLResponse *response, NSError *createError) {
+      (void)response;
+      if (createError || ![value isKindOfClass:NSDictionary.class]) {
+        if (completion) completion(nil, createError ?: [NSError errorWithDomain:@"NFBAtprotoClient" code:61 userInfo:@{NSLocalizedDescriptionKey: @"Could not open that conversation."}]);
+        return;
+      }
+      NSDictionary *convo = [value[@"convo"] isKindOfClass:NSDictionary.class] ? value[@"convo"] : (NSDictionary *)value;
+      if (completion) completion(convo, nil);
+    }];
   }];
 }
 
@@ -2573,6 +2575,28 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 }
 
 - (void)fetchAppViewGET:(NSString *)method params:(NSDictionary *)params requiresAuth:(BOOL)requiresAuth completion:(NFBAtprotoValueCompletion)completion {
+  NSUInteger generation = [NFBAtprotoSession sharedSession].accountGeneration;
+  [self fetchRawAppViewGET:method params:params requiresAuth:requiresAuth completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
+    if (error || !value) { if (completion) completion(value, response, error); return; }
+    [NFBPostLinkResolver resolveValue:value fetch:^(NSString *lookup, NSDictionary *lookupParams, void (^finish)(NSDictionary *, NSError *)) {
+      if (generation != [NFBAtprotoSession sharedSession].accountGeneration) {
+        finish(nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
+        return;
+      }
+      // Raw requests prevent recursive cards. Respect authenticated block state;
+      // a failed preview leaves the original post/link available.
+      [self fetchRawAppViewGET:lookup params:lookupParams requiresAuth:YES completion:^(id result, NSHTTPURLResponse *unused, NSError *lookupError) {
+        finish([result isKindOfClass:NSDictionary.class] ? result : nil, lookupError);
+      }];
+    } completion:^(id enriched) {
+      if (generation != [NFBAtprotoSession sharedSession].accountGeneration) {
+        if (completion) completion(nil, response, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
+      } else if (completion) completion(enriched, response, nil);
+    }];
+  }];
+}
+
+- (void)fetchRawAppViewGET:(NSString *)method params:(NSDictionary *)params requiresAuth:(BOOL)requiresAuth completion:(NFBAtprotoValueCompletion)completion {
   NSUInteger accountGeneration = [NFBAtprotoSession sharedSession].accountGeneration;
   NFBAtprotoValueCompletion originalCompletion = completion;
   completion = ^(id value, NSHTTPURLResponse *response, NSError *error) {
@@ -2756,72 +2780,9 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   }];
 }
 
-- (void)fetchChatDeclarationForDID:(NSString *)did completion:(void (^)(NSString *allowIncoming))completion {
-  if (did.length == 0) {
-    if (completion) completion(@"none");
-    return;
-  }
 
-  [[NFBAtprotoSession sharedSession] resolvePDSForDID:did completion:^(NSString *serviceEndpoint) {
-    if (serviceEndpoint.length == 0) {
-      if (completion) completion(@"none");
-      return;
-    }
 
-    [[NFBAtprotoSession sharedSession] xrpcGET:@"com.atproto.repo.getRecord"
-                                       service:serviceEndpoint
-                                        params:@{
-                                          @"repo": did,
-                                          @"collection": @"chat.bsky.actor.declaration",
-                                          @"rkey": @"self"
-                                        }
-                                 authenticated:NO
-                                    completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
-      if (response.statusCode == 404 || error.code == 404) {
-        if (completion) completion(@"all");
-        return;
-      }
-      if (error || ![value isKindOfClass:NSDictionary.class]) {
-        if (completion) completion(@"all");
-        return;
-      }
 
-      NSDictionary *record = [value[@"value"] isKindOfClass:NSDictionary.class] ? value[@"value"] : @{};
-      NSString *allowIncoming = NFBClientStringValue(record[@"allowIncoming"]);
-      if (![allowIncoming isEqualToString:@"none"] && ![allowIncoming isEqualToString:@"following"] && ![allowIncoming isEqualToString:@"all"]) {
-        allowIncoming = @"all";
-      }
-      if (completion) completion(allowIncoming);
-    }];
-  }];
-}
-
-- (void)fetchRelationshipFromActorDID:(NSString *)actorDID otherDID:(NSString *)otherDID completion:(void (^)(NSDictionary *relationship))completion {
-  if (actorDID.length == 0 || otherDID.length == 0) {
-    if (completion) completion(@{});
-    return;
-  }
-
-  [self fetchAppViewGET:@"app.bsky.graph.getRelationships"
-                 params:@{@"actor": actorDID, @"others": @[otherDID]}
-           requiresAuth:NO
-             completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
-    (void)response;
-    if (error || ![value isKindOfClass:NSDictionary.class]) {
-      if (completion) completion(@{});
-      return;
-    }
-    NSArray *relationships = [value[@"relationships"] isKindOfClass:NSArray.class] ? value[@"relationships"] : @[];
-    for (NSDictionary *relationship in relationships) {
-      if (![relationship isKindOfClass:NSDictionary.class]) continue;
-      if ([NFBClientStringValue(relationship[@"did"]) isEqualToString:otherDID]) {
-        if (completion) completion(relationship);
-        return;
-      }
-    }
-    if (completion) completion(@{});
-  }];
-}
 
 - (NSString *)targetPostURIForNotification:(NSDictionary *)notification {
   NSString *reason = [notification[@"reason"] isKindOfClass:NSString.class] ? notification[@"reason"] : @"";
@@ -3753,7 +3714,12 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 
 + (NSDictionary *)externalCardForPost:(NSDictionary *)post {
   NSDictionary *embed = [post[@"embed"] isKindOfClass:[NSDictionary class]] ? post[@"embed"] : @{};
-  return [self externalCardFromEmbed:embed];
+  NSDictionary *card = [self externalCardFromEmbed:embed];
+  if ([post[@"__nfbLinkedPost"] isKindOfClass:NSDictionary.class]) {
+    NSDictionary *link = NFBPostLink(card[@"url"]);
+    if ([link[@"uri"] isEqual:post[@"__nfbLinkedPostURI"]]) return nil;
+  }
+  return card;
 }
 
 + (NSDictionary *)externalCardFromEmbed:(NSDictionary *)embed {
@@ -4116,6 +4082,7 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 }
 
 + (NSDictionary *)quotedPostForPost:(NSDictionary *)post {
+  NSDictionary *linked = [post[@"__nfbLinkedPost"] isKindOfClass:NSDictionary.class] ? post[@"__nfbLinkedPost"] : nil;
   NSDictionary *embed = [post[@"embed"] isKindOfClass:[NSDictionary class]] ? post[@"embed"] : @{};
   NSDictionary *recordEmbed = [embed[@"record"] isKindOfClass:[NSDictionary class]] ? embed[@"record"] : nil;
   NSDictionary *record = nil;
@@ -4124,7 +4091,7 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   } else if (recordEmbed.count > 0) {
     record = recordEmbed;
   }
-  if (![record isKindOfClass:[NSDictionary class]] || record.count == 0) return nil;
+  if (![record isKindOfClass:[NSDictionary class]] || record.count == 0) return linked;
   return [self postFromRecordView:record];
 }
 
@@ -4193,6 +4160,7 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 }
 
 + (NSString *)reasonTextForFeedItem:(NSDictionary *)item {
+  if (NFBFeedReposter(item)) return NFBRepostContextText(item, [NFBAtprotoSession sharedSession].did);
   NSString *reason = [item[@"reason"] isKindOfClass:[NSString class]] ? item[@"reason"] : @"";
   NSDictionary *post = [self postFromFeedItem:item];
   NSDictionary *record = [post[@"record"] isKindOfClass:NSDictionary.class] ? post[@"record"] : @{};

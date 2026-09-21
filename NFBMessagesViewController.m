@@ -1,3 +1,6 @@
+#import "NFBPostLink.h"
+#import "NFBChatPermission.h"
+#import "NFBChatPagination.h"
 #import "NFBMessagesViewController.h"
 
 #import "NFBAtprotoClient.h"
@@ -39,6 +42,16 @@ static NSString *NFBTweetieLocalizedString(NSString *key, NSString *fallback) {
   NSString *value = localizationBundle ? [localizationBundle localizedStringForKey:key value:nil table:nil] : nil;
   if (value.length > 0 && ![value isEqualToString:key]) return value;
   return fallback ?: key ?: @"";
+}
+
+static NSString *NFBChatPresentedErrorMessage(NSError *error) {
+  if (NFBChatErrorIsPermissionDenied(error)) {
+    if ([error.userInfo[NFBChatErrorNameKey] isEqual:@"ConvoLocked"]) {
+      return NFBTweetieLocalizedString(@"DM_CONVERSATION_FOOTER_READ_ONLY_REASON_UNKNOWN_TITLE", @"You are unable to send messages in this conversation.");
+    }
+    return NFBTweetieLocalizedString(@"DIRECT_MESSAGE_ERROR_CANNOT_SEND_DIRECT_MESSAGE", @"Sorry! You cannot message this account.");
+  }
+  return error.localizedDescription;
 }
 
 static NSString *NFBTweetiePlainText(NSString *value) {
@@ -610,27 +623,8 @@ static NSString *NFBChatTrimTrailingURLPunctuation(NSString *value) {
 }
 
 static NSString *NFBChatPostURIFromURLString(NSString *urlString) {
-  NSString *candidate = NFBChatTrimTrailingURLPunctuation([urlString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
-  if ([candidate hasPrefix:@"at://"] && [candidate rangeOfString:@"/app.bsky.feed.post/"].location != NSNotFound) return candidate;
-  NSURL *url = [NSURL URLWithString:candidate];
-  if (!url && [candidate.lowercaseString hasPrefix:@"www."]) url = [NSURL URLWithString:[@"https://" stringByAppendingString:candidate]];
-  if (!url) return @"";
-  NSString *host = url.host.lowercaseString ?: @"";
-  if (![host isEqualToString:@"bsky.app"] && ![host hasSuffix:@".bsky.app"]) return @"";
-  NSArray<NSString *> *components = url.pathComponents ?: @[];
-  NSUInteger profileIndex = NSNotFound;
-  for (NSUInteger index = 0; index < components.count; index++) {
-    if ([components[index] isEqualToString:@"profile"]) {
-      profileIndex = index;
-      break;
-    }
-  }
-  if (profileIndex == NSNotFound || profileIndex + 3 >= components.count) return @"";
-  NSString *actor = [components[profileIndex + 1] stringByRemovingPercentEncoding] ?: components[profileIndex + 1];
-  NSString *postComponent = components[profileIndex + 2];
-  NSString *rkey = [components[profileIndex + 3] stringByRemovingPercentEncoding] ?: components[profileIndex + 3];
-  if (![postComponent isEqualToString:@"post"] || actor.length == 0 || rkey.length == 0) return @"";
-  return [NSString stringWithFormat:@"at://%@/app.bsky.feed.post/%@", actor, rkey];
+  NSString *candidate = NFBChatTrimTrailingURLPunctuation(urlString);
+  return NFBPostLink(candidate)[@"uri"] ?: @"";
 }
 
 static NSString *NFBChatPostActorFromURI(NSString *uri) {
@@ -652,20 +646,7 @@ static NSString *NFBChatPostRkeyFromURI(NSString *uri) {
 }
 
 static NSArray<NSString *> *NFBChatURLTokensInText(NSString *text) {
-  if (text.length == 0) return @[];
-  NSError *error = nil;
-  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\b((?:https?://|www\\.)[^\\s<>()]+|at://[^\\s<>()]+)" options:0 error:&error];
-  if (error || !regex) return @[];
-  NSMutableArray<NSString *> *tokens = [NSMutableArray array];
-  NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-  for (NSTextCheckingResult *match in matches) {
-    if (match.numberOfRanges < 2) continue;
-    NSRange range = [match rangeAtIndex:1];
-    if (range.location == NSNotFound || NSMaxRange(range) > text.length) continue;
-    NSString *token = NFBChatTrimTrailingURLPunctuation([text substringWithRange:range]);
-    if (token.length > 0) [tokens addObject:token];
-  }
-  return tokens;
+  return NFBPostLinkTokens(text);
 }
 
 static NSString *NFBChatSharedPostURIFromMessage(NSDictionary *message) {
@@ -701,7 +682,8 @@ static NSString *NFBChatMessageDisplayText(NSDictionary *message) {
   if (NFBChatSharedPostForMessage(message).count == 0) return text;
   NSMutableString *displayText = [text mutableCopy] ?: [NSMutableString string];
   for (NSString *token in NFBChatURLTokensInText(text)) {
-    if (NFBChatPostURIFromURLString(token).length == 0) continue;
+    NSString *uri = NFBChatPostURIFromURLString(token);
+    if (uri.length == 0 || ![uri isEqualToString:NFBChatSharedPostURIFromMessage(message)]) continue;
     [displayText replaceOccurrencesOfString:token withString:@"" options:0 range:NSMakeRange(0, displayText.length)];
   }
   return [displayText stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -818,7 +800,8 @@ static NSArray<NSDictionary *> *NFBMergedChatConversations(NSArray<NSDictionary 
   [merged sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
     NSString *leftDate = NFBChatMessageSentAt(NFBChatLastMessage(left) ?: @{});
     NSString *rightDate = NFBChatMessageSentAt(NFBChatLastMessage(right) ?: @{});
-    return [rightDate compare:leftDate];
+    NSComparisonResult order = [rightDate compare:leftDate];
+    return order != NSOrderedSame ? order : [NFBChatConversationID(left) compare:NFBChatConversationID(right)];
   }];
   return merged;
 }
@@ -2438,7 +2421,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     dispatch_async(dispatch_get_main_queue(), ^{
       if (error || !value) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DM_MANAGE_CONVERSATION_ACTION_REMOVE_FROM_GROUP_ERROR_TITLE", @"Unable to remove from conversation")
-                                                                       message:error.localizedDescription
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -2557,7 +2540,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     dispatch_async(dispatch_get_main_queue(), ^{
       if (error || !value) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DIRECT_MESSAGE_ADD_PEOPLE_ERROR_TITLE", @"Could not add people")
-                                                                       message:error.localizedDescription
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [viewController presentViewController:alert animated:YES completion:nil];
@@ -2776,6 +2759,9 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   UIView *_messageContentView;
   NFBMessageComposerView *_composerView;
   UIView *_requestFooterView;
+  UITextView *_readOnlyFooterView;
+  BOOL _directMessageUnavailable;
+  NSUInteger _messagePermissionGeneration;
   UILabel *_requestFooterLabel;
   UIButton *_requestAcceptButton;
   UIButton *_requestDeleteButton;
@@ -2789,6 +2775,10 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   NSString *_cursor;
   BOOL _loading;
   BOOL _loadingMoreMessages;
+  BOOL _olderMessagesFailed;
+  NSUInteger _messageLoadGeneration;
+  NSMutableSet<NSString *> *_consumedMessageCursors;
+  NSMutableDictionary<NSString *, NSValue *> *_messageRowFrames;
   BOOL _usedLogFallback;
   BOOL _didReloadAfterInitialLayout;
   BOOL _pendingScrollToBottom;
@@ -2810,6 +2800,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     _owningAccountGeneration = [NFBAtprotoSession sharedSession].accountGeneration;
     _conversation = [conversation copy] ?: @{};
     _messages = @[];
+    _consumedMessageCursors = [NSMutableSet set];
+    _messageRowFrames = [NSMutableDictionary dictionary];
     _sharedPostsByURI = [NSMutableDictionary dictionary];
     _resolvingSharedPostURIs = [NSMutableSet set];
     _failedSharedPostURIs = [NSMutableSet set];
@@ -2888,6 +2880,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   CGPoint offset = _messageScrollView.contentOffset;
   [self reloadRenderedMessages];
   _messageScrollView.contentOffset = offset;
+  [self updateReadOnlyFooter];
 }
 
 - (void)viewDidLoad {
@@ -2934,6 +2927,13 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     [weakSelf sendText:text];
   };
   _requestFooterView = [self createRequestFooterView];
+  _readOnlyFooterView = [[UITextView alloc] init];
+  _readOnlyFooterView.translatesAutoresizingMaskIntoConstraints = NO;
+  _readOnlyFooterView.editable = NO;
+  _readOnlyFooterView.scrollEnabled = NO;
+  _readOnlyFooterView.textContainerInset = UIEdgeInsetsMake(16.0, 16.0, 12.0, 16.0);
+  _readOnlyFooterView.hidden = YES;
+  [self updateReadOnlyFooter];
 
   _loadingView = [[UIImageView alloc] initWithImage:NFBLoadingImage()];
   _loadingView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2953,6 +2953,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   [_messageScrollView addSubview:_messageContentView];
   [self.view addSubview:_composerView];
   [self.view addSubview:_requestFooterView];
+  [self.view addSubview:_readOnlyFooterView];
   [self.view addSubview:_loadingView];
   [self.view addSubview:_statusLabel];
   _composerHeightConstraint = [_composerView.heightAnchor constraintEqualToConstant:61.0];
@@ -2970,6 +2971,10 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     [_composerView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     _composerHeightConstraint,
     _composerBottomConstraint,
+    [_readOnlyFooterView.leadingAnchor constraintEqualToAnchor:_composerView.leadingAnchor],
+    [_readOnlyFooterView.trailingAnchor constraintEqualToAnchor:_composerView.trailingAnchor],
+    [_readOnlyFooterView.topAnchor constraintEqualToAnchor:_composerView.topAnchor],
+    [_readOnlyFooterView.bottomAnchor constraintEqualToAnchor:_composerView.bottomAnchor],
     [_requestFooterView.leadingAnchor constraintEqualToAnchor:_composerView.leadingAnchor],
     [_requestFooterView.trailingAnchor constraintEqualToAnchor:_composerView.trailingAnchor],
     [_requestFooterView.topAnchor constraintEqualToAnchor:_composerView.topAnchor],
@@ -2992,6 +2997,51 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   [self hydrateConversationMembersIfNeeded];
   [self seedMessagesFromConversationIfNeeded];
   [self loadMessages];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self refreshDirectMessagePermission];
+}
+
+- (void)updateReadOnlyFooter {
+  NSString *html = NFBTweetieLocalizedString(@"DIRECT_MESSAGES_READ_ONLY_FOOTER_MESSAGE", @"You can no longer send Direct Messages to this person. <a href=\"#\">Learn more</a>");
+  NSRange start = [html rangeOfString:@"<a "], end = [html rangeOfString:@"</a>"];
+  NSMutableAttributedString *text = nil;
+  if (start.location != NSNotFound && end.location != NSNotFound && end.location > start.location) {
+    NSRange close = [html rangeOfString:@">" options:0 range:NSMakeRange(start.location, end.location - start.location)];
+    if (close.location != NSNotFound) {
+      NSString *prefix = [html substringToIndex:start.location];
+      NSString *link = [html substringWithRange:NSMakeRange(NSMaxRange(close), end.location - NSMaxRange(close))];
+      text = [[NSMutableAttributedString alloc] initWithString:[prefix stringByAppendingString:link]];
+      [text addAttribute:NSLinkAttributeName value:@"https://bsky.social/about/blog/05-22-2024-direct-messages" range:NSMakeRange(prefix.length, link.length)];
+    }
+  }
+  if (!text) text = [[NSMutableAttributedString alloc] initWithString:html];
+  NSMutableParagraphStyle *paragraph = [[NSMutableParagraphStyle alloc] init];
+  paragraph.alignment = NSTextAlignmentCenter;
+  [text addAttributes:@{NSFontAttributeName: NFBFont(14.0, NFBFontWeightRegular), NSForegroundColorAttributeName: NFBColorSecondaryText(), NSParagraphStyleAttributeName: paragraph} range:NSMakeRange(0, text.length)];
+  _readOnlyFooterView.attributedText = text;
+  _readOnlyFooterView.backgroundColor = NFBColorBackground();
+  _readOnlyFooterView.linkTextAttributes = @{NSForegroundColorAttributeName: NFBColorAccent()};
+}
+
+- (void)refreshDirectMessagePermission {
+  if (![self ownsCurrentAccount] || NFBChatConversationIsGroup(_conversation)) return;
+  NSArray *members = NFBChatNonViewerMembers(_conversation);
+  if (members.count != 1) return;
+  NSString *did = NFBStringValue(members.firstObject[@"did"]);
+  if (did.length == 0) return;
+  NSUInteger generation = ++_messagePermissionGeneration;
+  [[NFBAtprotoClient sharedClient] fetchChatConversationAvailabilityForMembers:@[did] completion:^(NSDictionary *value, NSError *error) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (![self ownsCurrentAccount] || generation != self->_messagePermissionGeneration || error) return;
+      self->_directMessageUnavailable = !NFBChatAvailabilityAllowsMessaging(value);
+      if (self->_directMessageUnavailable) [self->_composerView endEditing:YES];
+      [self applyConversationPermissionState];
+      [self.view setNeedsLayout];
+    });
+  }];
 }
 
 - (void)dealloc {
@@ -3052,6 +3102,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     height = 61.0 + bottomInset;
   } else if ([self shouldShowRequestFooter]) {
     height = 112.0 + bottomInset;
+  } else if (_directMessageUnavailable) {
+    height = MAX(76.0, [_readOnlyFooterView sizeThatFits:CGSizeMake(CGRectGetWidth(self.view.bounds), CGFLOAT_MAX)].height) + bottomInset;
   }
   if (fabs(_composerHeightConstraint.constant - height) > 0.5) {
     _composerHeightConstraint.constant = height;
@@ -3059,7 +3111,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
 }
 
 - (BOOL)canSendMessagesInCurrentConversation {
-  return NFBChatConversationCanSendMessages(_conversation ?: @{});
+  return !_directMessageUnavailable && NFBChatConversationCanSendMessages(_conversation ?: @{});
 }
 
 - (void)applyConversationPermissionState {
@@ -3067,6 +3119,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   BOOL showRequestFooter = !canSend && [self shouldShowRequestFooter];
   _composerView.hidden = !canSend;
   _composerView.userInteractionEnabled = canSend;
+  _readOnlyFooterView.hidden = !_directMessageUnavailable || showRequestFooter;
   _requestFooterView.hidden = !showRequestFooter;
   _requestFooterView.userInteractionEnabled = showRequestFooter;
   if (showRequestFooter) {
@@ -3074,7 +3127,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     _statusLabel.hidden = YES;
   }
   [self updateComposerHeightForCurrentSafeArea];
-  if (!canSend && !showRequestFooter && _messages.count == 0) {
+  if (!canSend && !showRequestFooter && !_directMessageUnavailable && _messages.count == 0) {
     [self showStatusText:NFBChatConversationReadOnlyMessage(_conversation ?: @{})];
   } else if (_messages.count > 0 && [_statusLabel.text isEqualToString:NFBChatConversationReadOnlyMessage(_conversation ?: @{})]) {
     _statusLabel.hidden = YES;
@@ -3097,6 +3150,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   [self.view bringSubviewToFront:_messageScrollView];
   [self.view bringSubviewToFront:_composerView];
   [self.view bringSubviewToFront:_requestFooterView];
+  [self.view bringSubviewToFront:_readOnlyFooterView];
   [self.view bringSubviewToFront:_loadingView];
   [self.view bringSubviewToFront:_statusLabel];
 }
@@ -3126,7 +3180,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   self.navigationItem.titleView = NFBTitleView(NFBChatConversationTitle(_conversation), NFBChatConversationHandle(_conversation));
   UIButton *infoButton = [UIButton buttonWithType:UIButtonTypeCustom];
   infoButton.frame = CGRectMake(0.0, 0.0, 44.0, 44.0);
-  [infoButton setImage:NFBTemplateIcon(@"nfb_info") forState:UIControlStateNormal];
+  [infoButton setImage:NFBTemplateIcon(@"nfb_conversation_info") forState:UIControlStateNormal];
+  infoButton.accessibilityLabel = NFBTweetieLocalizedString(@"DM_CONVERSATION_INFO_TITLE", @"Conversation info");
   infoButton.tintColor = NFBColorText();
   [infoButton addTarget:self action:@selector(infoTapped) forControlEvents:UIControlEventTouchUpInside];
   self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:infoButton];
@@ -3152,7 +3207,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       [self setRequestFooterActionsEnabled:YES];
       if (error || !value) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DM_MESSAGE_SEND_ERROR_FAILED_TO_SEND", @"Message failed to send")
-                                                                       message:error.localizedDescription
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -3183,7 +3238,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       [self setRequestFooterActionsEnabled:YES];
       if (error) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBChatDeleteConversationActionTitle(self->_conversation ?: @{})
-                                                                       message:error.localizedDescription
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -3207,7 +3262,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       if (error) {
         [self setRequestFooterActionsEnabled:YES];
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DM_CONVERSATION_FOOTER_MESSAGE_REQUESTS_ACTION_BLOCK_TITLE", @"Block")
-                                                                       message:error.localizedDescription
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -3275,9 +3330,9 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   if (cacheName.length == 0) return;
   NSMutableDictionary *payload = [@{
     @"conversation": _conversation ?: @{},
-    @"messages": NFBChatLimitedDictionaries(_messages ?: @[], 500)
+    @"messages": NFBChatCacheSlice(_messages, 500, YES)
   } mutableCopy];
-  if (_cursor.length > 0) payload[@"cursor"] = _cursor;
+  if (_messages.count <= 500 && _cursor.length > 0) payload[@"cursor"] = _cursor;
   NFBChatSaveCacheNamed(cacheName, payload);
 }
 
@@ -3410,6 +3465,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   for (NSString *uri in urisToFetch) {
     [self fetchSharedPostForURI:uri completion:^(NSDictionary *post, NSError *error) {
       dispatch_async(dispatch_get_main_queue(), ^{
+        if (![self ownsCurrentAccount]) return;
         [self->_resolvingSharedPostURIs removeObject:uri];
         if (error || post.count == 0) {
           [self->_failedSharedPostURIs addObject:uri];
@@ -3419,8 +3475,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
         NSString *canonicalURI = NFBStringValue(post[@"uri"]);
         if (canonicalURI.length > 0) self->_sharedPostsByURI[canonicalURI] = post;
         BOOL wasNearBottom = [self isScrolledNearBottom];
-        CGFloat oldContentHeight = self->_messageScrollView.contentSize.height;
-        CGFloat oldOffsetY = self->_messageScrollView.contentOffset.y;
+        NSDictionary *anchor = [self visibleMessageAnchor];
         self->_messages = [self messagesByApplyingSharedPostCache:self->_messages];
         [self applySharedPostCacheToConversation];
         [self saveMessageCache];
@@ -3431,8 +3486,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
         if (wasNearBottom) {
           [self scrollToBottomAnimated:NO];
         } else {
-          CGFloat newContentHeight = self->_messageScrollView.contentSize.height;
-          [self setMessageScrollOffsetY:oldOffsetY + MAX(0.0, newContentHeight - oldContentHeight) animated:NO];
+          [self restoreVisibleMessageAnchor:anchor];
         }
         if (self.conversationChangedHandler) self.conversationChangedHandler(self->_conversation);
       });
@@ -3465,6 +3519,10 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
 - (void)loadMessages {
   if (![self ownsCurrentAccount]) return;
   if (_loading) return;
+  NSUInteger generation = ++_messageLoadGeneration;
+  _loadingMoreMessages = NO;
+  _olderMessagesFailed = NO;
+  [_consumedMessageCursors removeAllObjects];
   NSString *conversationID = NFBChatConversationID(_conversation);
   if (conversationID.length == 0) {
     [self showStatusText:@"This conversation is not available."];
@@ -3476,16 +3534,19 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   NFBStartLoadingAnimation(_loadingView);
   [[NFBAtprotoClient sharedClient] fetchChatMessagesForConversationID:conversationID cursor:nil completion:^(NSArray<NSDictionary *> *items, NSString *cursor, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (![self ownsCurrentAccount]) return;
-      self->_loading = NO;
+      if (![self ownsCurrentAccount] || generation != self->_messageLoadGeneration) return;
+
       self->_loadingView.hidden = YES;
       NFBStopLoadingAnimation(self->_loadingView);
       if (error) {
         NSLog(@"NotTwitter chat thread load failed convo=%@ error=%@", conversationID, error.localizedDescription ?: @"unknown");
         [self seedMessagesFromConversationIfNeeded];
+        self->_loading = NO;
         [self loadMessagesFromLogFallbackForConversationID:conversationID emptyStatus:error.localizedDescription ?: @"Could not load this conversation."];
         return;
       }
+      BOOL followBottom = self->_messages.count == 0 || self->_pendingScrollToBottom || [self isScrolledNearBottom];
+      NSDictionary *anchor = [self visibleMessageAnchor];
       if (items.count > 0) {
         self->_messages = NFBMergedChatMessages(self->_messages, items ?: @[]);
         NSMutableDictionary *nextConversation = [self->_conversation mutableCopy] ?: [NSMutableDictionary dictionary];
@@ -3495,6 +3556,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
         [self hydrateSharedPostsForCurrentMessages];
       } else {
         [self seedMessagesFromConversationIfNeeded];
+        self->_loading = NO;
         [self loadMessagesFromLogFallbackForConversationID:conversationID emptyStatus:@"No messages yet."];
         return;
       }
@@ -3504,11 +3566,18 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       [self->_tableView layoutIfNeeded];
       [self updateTableInsetsForCurrentContent];
       [self reloadRenderedMessages];
-      self->_pendingScrollToBottom = YES;
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [self scrollToBottomAnimated:NO];
-      });
+      if (followBottom) {
+        self->_pendingScrollToBottom = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          if (![self ownsCurrentAccount] || generation != self->_messageLoadGeneration) return;
+          [self scrollToBottomAnimated:NO];
+        });
+      } else {
+        [self restoreVisibleMessageAnchor:anchor];
+      }
+      self->_loading = NO;
       [self markReadIfPossible];
+      [self scheduleOlderMessagePrefetch];
     });
   }];
 }
@@ -3520,13 +3589,16 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     return;
   }
   _usedLogFallback = YES;
+  _loading = YES;
+  NSUInteger generation = _messageLoadGeneration;
   _statusLabel.hidden = YES;
   [[NFBAtprotoClient sharedClient] fetchChatLogMessagesForConversationID:conversationID completion:^(NSArray<NSDictionary *> *items, NSString *cursor, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (![self ownsCurrentAccount]) return;
+      if (![self ownsCurrentAccount] || generation != self->_messageLoadGeneration) return;
+      self->_loading = NO;
       if (items.count > 0) {
         self->_messages = NFBMergedChatMessages(self->_messages, items ?: @[]);
-        self->_cursor = cursor;
+        (void)cursor; // getLog and getMessages have independent cursor namespaces.
         [self hydrateSharedPostsForCurrentMessages];
         [self saveMessageCache];
         [self->_tableView reloadData];
@@ -3568,6 +3640,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   }
   [[NFBAtprotoClient sharedClient] fetchChatConversationWithID:conversationID completion:^(NSDictionary *value, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
+      if (![self ownsCurrentAccount]) return;
       if (error || !value) {
         if (self->_messages.count == 0) [self showStatusText:error.localizedDescription ?: @"No messages yet."];
         return;
@@ -3577,6 +3650,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       self->_conversation = nextConversation;
       [self configureNavigation];
       [self applyConversationPermissionState];
+      if (!self->_directMessageUnavailable) [self refreshDirectMessagePermission];
       [self seedMessagesFromConversationIfNeeded];
       [self hydrateSharedPostsForCurrentMessages];
       if (self.conversationChangedHandler) self.conversationChangedHandler(self->_conversation);
@@ -3650,6 +3724,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     [subview removeFromSuperview];
   }
 
+  [_messageRowFrames removeAllObjects];
   NSMutableArray<NSNumber *> *rowHeights = [NSMutableArray arrayWithCapacity:_messages.count];
   CGFloat messagesHeight = 0.0;
   for (NSUInteger index = 0; index < _messages.count; index++) {
@@ -3678,6 +3753,14 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     olderSpinner.hidden = !_loadingMoreMessages;
     [_messageContentView addSubview:olderSpinner];
     if (_loadingMoreMessages) NFBStartLoadingAnimation(olderSpinner);
+    if (!_loadingMoreMessages) {
+      UIButton *olderButton = [UIButton buttonWithType:UIButtonTypeSystem];
+      olderButton.frame = CGRectMake(16.0, 0.0, width - 32.0, 38.0);
+      olderButton.titleLabel.font = NFBFont(13.0, NFBFontWeightRegular);
+      [olderButton setTitle:_olderMessagesFailed ? @"Couldn't load older messages. Tap to retry." : @"Load earlier messages" forState:UIControlStateNormal];
+      [olderButton addTarget:self action:@selector(retryOlderMessages) forControlEvents:UIControlEventTouchUpInside];
+      [_messageContentView addSubview:olderButton];
+    }
   }
 
   for (NSUInteger index = 0; index < _messages.count; index++) {
@@ -3694,6 +3777,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
 
     CGFloat rowTop = y;
     CGFloat rowHeight = [rowHeights[index] doubleValue];
+    NSString *messageID = NFBChatMessageID(message);
+    if (messageID.length > 0) _messageRowFrames[messageID] = [NSValue valueWithCGRect:CGRectMake(0, rowTop, width, rowHeight)];
     CGFloat maxBubbleWidth = MAX(180.0, width * 0.72);
     CGFloat textWidth = MAX(120.0, maxBubbleWidth - 32.0);
     NSString *text = NFBChatMessageDisplayText(message);
@@ -3726,11 +3811,21 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       bubble.tag = (NSInteger)index + 1;
       [_messageContentView addSubview:bubble];
 
-      UILabel *body = [[UILabel alloc] initWithFrame:CGRectInset(bubble.bounds, 16.0, 10.0)];
+      NFBInteractiveTextLabel *body = [[NFBInteractiveTextLabel alloc] initWithFrame:CGRectInset(bubble.bounds, 16.0, 10.0)];
       body.numberOfLines = 0;
       body.font = NFBFont(NFBIPAMetricValue(NFBIPAMetricMessageBodyFontSize), NFBFontWeightRegular);
       body.textColor = mine ? UIColor.whiteColor : NFBColorText();
       body.text = text;
+      if (NFBChatURLTokensInText(text).count > 0) {
+        NSMutableAttributedString *linkedText = [NFBTweetBodyAttributedString(text, body.font) mutableCopy];
+        if (mine) [linkedText addAttribute:NSForegroundColorAttributeName value:UIColor.whiteColor range:NSMakeRange(0, linkedText.length)];
+        [linkedText enumerateAttribute:NFBTextLinkURLAttributeName inRange:NSMakeRange(0, linkedText.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+          if (value) [linkedText addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+        }];
+        body.attributedText = linkedText;
+        __weak typeof(self) weakSelf = self;
+        body.linkTapHandler = ^(NSURL *url) { NFBOpenTweetTextURL(url, weakSelf); };
+      }
       [bubble addSubview:body];
 
       UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(manualMessageLongPressed:)];
@@ -3900,7 +3995,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   CGFloat maxOffsetY = MAX(0.0, _messageScrollView.contentSize.height - CGRectGetHeight(_messageScrollView.bounds));
   CGPoint target = CGPointMake(0.0, MIN(MAX(0.0, offsetY), maxOffsetY));
   BOOL shouldAnimate = animated && fabs(_messageScrollView.contentOffset.y - target.y) > 0.5;
-  _scrollingProgrammatically = shouldAnimate;
+  _scrollingProgrammatically = YES;
   [_messageScrollView setContentOffset:target animated:shouldAnimate];
   if (!shouldAnimate) {
     _scrollingProgrammatically = NO;
@@ -3939,57 +4034,74 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   _tableView.scrollIndicatorInsets = inset;
 }
 
+// Capture at response time: the reader may keep scrolling while the request runs.
+- (NSDictionary *)visibleMessageAnchor {
+  CGFloat offset = _messageScrollView.contentOffset.y;
+  for (NSDictionary *message in _messages) {
+    NSString *messageID = NFBChatMessageID(message);
+    NSValue *value = _messageRowFrames[messageID];
+    if (!value) continue;
+    CGRect frame = value.CGRectValue;
+    if (CGRectGetMaxY(frame) > offset) {
+      return @{@"id": messageID, @"distance": @(offset - frame.origin.y)};
+    }
+  }
+  return nil;
+}
+
+- (void)restoreVisibleMessageAnchor:(NSDictionary *)anchor {
+  NSValue *value = _messageRowFrames[NFBStringValue(anchor[@"id"])];
+  if (value) [self setMessageScrollOffsetY:value.CGRectValue.origin.y + [anchor[@"distance"] doubleValue] animated:NO];
+}
+
+- (void)retryOlderMessages {
+  _olderMessagesFailed = NO;
+  [self loadOlderMessagesIfNeeded];
+}
+
+- (void)scheduleOlderMessagePrefetch {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!self.viewIfLoaded.window || self->_pendingScrollToBottom || self->_scrollingProgrammatically) return;
+    CGFloat threshold = NFBChatPaginationPrefetchDistance(CGRectGetHeight(self->_messageScrollView.bounds));
+    if (self->_messageScrollView.contentOffset.y < threshold) [self loadOlderMessagesIfNeeded];
+  });
+}
+
 - (void)loadOlderMessagesIfNeeded {
   if (![self ownsCurrentAccount]) return;
-  if (_loading || _loadingMoreMessages || _cursor.length == 0) return;
+  if (_loading || _loadingMoreMessages || _olderMessagesFailed || _cursor.length == 0) return;
   NSString *conversationID = NFBChatConversationID(_conversation);
   NSString *cursor = [_cursor copy];
-  if (conversationID.length == 0 || cursor.length == 0) return;
-
+  if (conversationID.length == 0) return;
+  NSUInteger generation = _messageLoadGeneration;
   _loadingMoreMessages = YES;
-  CGFloat oldContentHeight = _messageScrollView.contentSize.height;
-  CGFloat oldOffsetY = _messageScrollView.contentOffset.y;
   [self reloadRenderedMessages];
-
   [[NFBAtprotoClient sharedClient] fetchChatMessagesForConversationID:conversationID cursor:cursor completion:^(NSArray<NSDictionary *> *items, NSString *nextCursor, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (![self ownsCurrentAccount]) return;
-      self->_loadingMoreMessages = NO;
+      if (![self ownsCurrentAccount] || generation != self->_messageLoadGeneration) return;
       if (error) {
+        self->_olderMessagesFailed = YES;
+        self->_loadingMoreMessages = NO;
         [self reloadRenderedMessages];
         return;
       }
-
-      NSArray<NSDictionary *> *previousMessages = self->_messages ?: @[];
-      self->_messages = NFBMergedChatMessages(previousMessages, items ?: @[]);
-      BOOL addedMessages = self->_messages.count > previousMessages.count;
+      NSDictionary *anchor = [self visibleMessageAnchor];
+      self->_messages = NFBMergedChatMessages(self->_messages, items ?: @[]);
+      self->_cursor = NFBChatNextPageCursor(cursor, nextCursor, self->_consumedMessageCursors);
       [self hydrateSharedPostsForCurrentMessages];
-      if (nextCursor.length > 0 && ![nextCursor isEqualToString:cursor]) {
-        self->_cursor = nextCursor;
-      } else if (!addedMessages || nextCursor.length == 0) {
-        self->_cursor = nil;
-      }
-
       [self->_tableView reloadData];
-      [self->_tableView layoutIfNeeded];
-      [self updateTableInsetsForCurrentContent];
+      self->_loadingMoreMessages = NO;
       [self reloadRenderedMessages];
+      [self restoreVisibleMessageAnchor:anchor];
       [self saveMessageCache];
-
-      CGFloat newContentHeight = self->_messageScrollView.contentSize.height;
-      CGFloat targetOffsetY = oldOffsetY + MAX(0.0, newContentHeight - oldContentHeight);
-      [self setMessageScrollOffsetY:targetOffsetY animated:NO];
-      [self markReadIfPossible];
+      [self scheduleOlderMessagePrefetch];
     });
   }];
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-  if (scrollView != _messageScrollView) return;
-  if (_scrollingProgrammatically) return;
-  if (scrollView.contentOffset.y < 96.0 && _cursor.length > 0) {
-    [self loadOlderMessagesIfNeeded];
-  }
+  if (scrollView != _messageScrollView || _scrollingProgrammatically || _pendingScrollToBottom) return;
+  if (scrollView.isDragging || scrollView.isDecelerating) [self scheduleOlderMessagePrefetch];
 }
 
 - (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
@@ -3999,7 +4111,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
 - (void)sendText:(NSString *)text {
   if (![self canSendMessagesInCurrentConversation]) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DM_MESSAGE_SEND_ERROR_FAILED_TO_SEND", @"Message failed to send")
-                                                                   message:NFBChatConversationReadOnlyMessage(_conversation ?: @{})
+                                                                   message:_directMessageUnavailable ? NFBChatPresentedErrorMessage(NFBChatPermissionDeniedError()) : NFBChatConversationReadOnlyMessage(_conversation ?: @{})
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -4008,10 +4120,17 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   _composerView.sending = YES;
   [[NFBAtprotoClient sharedClient] sendChatMessageToConversationID:NFBChatConversationID(_conversation) text:text completion:^(NSDictionary *value, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
+      if (![self ownsCurrentAccount]) return;
       self->_composerView.sending = NO;
       if (error || !value) {
+        if (NFBChatErrorIsPermissionDenied(error) && !NFBChatConversationIsGroup(self->_conversation)) {
+          self->_messagePermissionGeneration++;
+          self->_directMessageUnavailable = YES;
+          [self->_composerView endEditing:YES];
+          [self applyConversationPermissionState];
+        }
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DM_MESSAGE_SEND_ERROR_FAILED_TO_SEND", @"Message failed to send")
-                                                                       message:error.localizedDescription
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -4213,6 +4332,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   UIImageView *_headerAvatarImageView;
   BOOL _loading;
   BOOL _loadingMoreConversations;
+  BOOL _moreConversationsFailed;
+  NSMutableSet<NSString *> *_consumedConversationCursors;
   BOOL _showingRequests;
   BOOL _refreshSuccessSoundPending;
 }
@@ -4463,6 +4584,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     _conversationListGeneration++;
     _loading = NO;
     _loadingMoreConversations = NO;
+    _moreConversationsFailed = NO;
+    _consumedConversationCursors = [NSMutableSet set];
     _refreshSuccessSoundPending = NO;
     [_refreshControl endRefreshing];
   }
@@ -4487,8 +4610,31 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   NSMutableDictionary *payload = [@{
     @"conversations": NFBChatLimitedDictionaries(_conversations ?: @[], 120)
   } mutableCopy];
-  if (_cursor.length > 0) payload[@"cursor"] = _cursor;
+  if (_conversations.count <= 120 && _cursor.length > 0) payload[@"cursor"] = _cursor;
   NFBChatSaveCacheNamed([self conversationListCacheName], payload);
+}
+
+- (NSDictionary *)visibleConversationAnchor {
+  if (_tableView.contentOffset.y <= -_tableView.adjustedContentInset.top + 1.0) return nil;
+  NSIndexPath *path = _tableView.indexPathsForVisibleRows.firstObject;
+  NSInteger index = path.row - (_showingRequests ? 0 : 1);
+  if (!path || index < 0 || (NSUInteger)index >= _filteredConversations.count) return nil;
+  NSString *conversationID = NFBChatConversationID(_filteredConversations[(NSUInteger)index]);
+  return @{@"id": conversationID, @"distance": @(_tableView.contentOffset.y - [_tableView rectForRowAtIndexPath:path].origin.y)};
+}
+
+- (void)restoreVisibleConversationAnchor:(NSDictionary *)anchor {
+  if (!anchor) return;
+  NSUInteger index = [_filteredConversations indexOfObjectPassingTest:^BOOL(NSDictionary *conversation, NSUInteger idx, BOOL *stop) {
+    return [NFBChatConversationID(conversation) isEqualToString:anchor[@"id"]];
+  }];
+  if (index == NSNotFound) return;
+  [_tableView layoutIfNeeded];
+  NSIndexPath *path = [NSIndexPath indexPathForRow:(NSInteger)index + (_showingRequests ? 0 : 1) inSection:0];
+  CGFloat y = [_tableView rectForRowAtIndexPath:path].origin.y + [anchor[@"distance"] doubleValue];
+  CGFloat minimum = -_tableView.adjustedContentInset.top;
+  CGFloat maximum = MAX(minimum, _tableView.contentSize.height - CGRectGetHeight(_tableView.bounds) + _tableView.adjustedContentInset.bottom);
+  [_tableView setContentOffset:CGPointMake(0, MIN(maximum, MAX(minimum, y))) animated:NO];
 }
 
 - (void)loadConversations {
@@ -4503,6 +4649,10 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     [_refreshControl endRefreshing];
     return;
   }
+  _conversationListGeneration++;
+  _loadingMoreConversations = NO;
+  _moreConversationsFailed = NO;
+  _consumedConversationCursors = [NSMutableSet set];
   _loading = YES;
   BOOL hasCachedRows = _conversations.count > 0;
   _loadingView.hidden = hasCachedRows;
@@ -4515,6 +4665,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   NFBAtprotoArrayCompletion completion = ^(NSArray<NSDictionary *> *items, NSString *cursor, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (accountGeneration != [NFBAtprotoSession sharedSession].accountGeneration || requests != self->_showingRequests || listGeneration != self->_conversationListGeneration) return;
+      NSDictionary *anchor = [self visibleConversationAnchor];
       self->_loading = NO;
       self->_loadingView.hidden = YES;
       NFBStopLoadingAnimation(self->_loadingView);
@@ -4525,13 +4676,15 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
         if (self->_conversations.count == 0) [self loadCachedConversationsIfAvailable];
       } else {
         NSArray<NSDictionary *> *listItems = NFBChatConversationsForList(items ?: @[], self->_showingRequests);
-        self->_conversations = NFBMergedChatConversations(@[], listItems);
+        self->_conversations = NFBMergedChatConversations(self->_conversations, listItems);
         self->_cursor = cursor;
         [self saveConversationListCache];
         [[NFBNotificationCoordinator sharedCoordinator] refreshMessageBadge];
         if (shouldPlayRefreshSound) NFBPlaySound(@"refresh.aac");
       }
       [self applySearchFilter];
+      [self restoreVisibleConversationAnchor:anchor];
+      if (!error) [self scheduleConversationPrefetch];
     });
   };
   if (_showingRequests) {
@@ -4543,29 +4696,29 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
 
 - (void)loadMoreConversationsIfNeeded {
   if (![self ownsCurrentAccount]) return;
-  if (_loading || _loadingMoreConversations || _cursor.length == 0) return;
+  if (_loading || _loadingMoreConversations || _moreConversationsFailed || _cursor.length == 0) return;
   NSString *cursor = [_cursor copy];
   _loadingMoreConversations = YES;
+  [self updateConversationPagingFooter];
   NSUInteger accountGeneration = [NFBAtprotoSession sharedSession].accountGeneration;
   BOOL requests = _showingRequests;
   NSUInteger listGeneration = _conversationListGeneration;
   NFBAtprotoArrayCompletion completion = ^(NSArray<NSDictionary *> *items, NSString *nextCursor, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (accountGeneration != [NFBAtprotoSession sharedSession].accountGeneration || requests != self->_showingRequests || listGeneration != self->_conversationListGeneration) return;
-      self->_loadingMoreConversations = NO;
+      NSDictionary *anchor = [self visibleConversationAnchor];
+      self->_moreConversationsFailed = error != nil;
       if (!error) {
         NSArray<NSDictionary *> *previous = self->_conversations ?: @[];
         NSArray<NSDictionary *> *listItems = NFBChatConversationsForList(items ?: @[], self->_showingRequests);
         self->_conversations = NFBMergedChatConversations(previous, listItems);
-        BOOL addedConversations = self->_conversations.count > previous.count;
-        if (nextCursor.length > 0 && ![nextCursor isEqualToString:cursor]) {
-          self->_cursor = nextCursor;
-        } else if (!addedConversations || nextCursor.length == 0) {
-          self->_cursor = nil;
-        }
+        self->_cursor = NFBChatNextPageCursor(cursor, nextCursor, self->_consumedConversationCursors);
         [self saveConversationListCache];
-        [self applySearchFilter];
       }
+      self->_loadingMoreConversations = NO;
+      [self applySearchFilter];
+      [self restoreVisibleConversationAnchor:anchor];
+      if (!error) [self scheduleConversationPrefetch];
     });
   };
   if (_showingRequests) {
@@ -4573,6 +4726,45 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   } else {
     [[NFBAtprotoClient sharedClient] fetchChatConversationsWithCursor:cursor completion:completion];
   }
+}
+
+- (void)updateConversationPagingFooter {
+  if (!_loadingMoreConversations && _cursor.length == 0) {
+    _tableView.tableFooterView = [[UIView alloc] initWithFrame:CGRectZero];
+    return;
+  }
+  UIView *footer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, CGRectGetWidth(_tableView.bounds), 48)];
+  if (_loadingMoreConversations) {
+    UIImageView *spinner = [[UIImageView alloc] initWithImage:NFBLoadingImage()];
+    spinner.frame = CGRectMake((CGRectGetWidth(footer.bounds) - 22) / 2, 13, 22, 22);
+    spinner.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    spinner.tintColor = NFBColorSecondaryText();
+    [footer addSubview:spinner];
+    NFBStartLoadingAnimation(spinner);
+  } else {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.frame = footer.bounds;
+    button.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    button.titleLabel.font = NFBFont(14, NFBFontWeightRegular);
+    [button setTitle:_moreConversationsFailed ? @"Couldn't load more messages. Tap to retry." : @"Load more conversations" forState:UIControlStateNormal];
+    [button addTarget:self action:@selector(retryMoreConversations) forControlEvents:UIControlEventTouchUpInside];
+    [footer addSubview:button];
+  }
+  _tableView.tableFooterView = footer;
+}
+
+- (void)retryMoreConversations {
+  _moreConversationsFailed = NO;
+  [self loadMoreConversationsIfNeeded];
+}
+
+- (void)scheduleConversationPrefetch {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!self.viewIfLoaded.window) return;
+    [self->_tableView layoutIfNeeded];
+    CGFloat distance = self->_tableView.contentSize.height - self->_tableView.contentOffset.y - CGRectGetHeight(self->_tableView.bounds) + self->_tableView.adjustedContentInset.bottom;
+    if (distance < NFBChatPaginationPrefetchDistance(CGRectGetHeight(self->_tableView.bounds))) [self loadMoreConversationsIfNeeded];
+  });
 }
 
 - (void)applySearchFilter {
@@ -4587,17 +4779,24 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
     }
     _filteredConversations = matches;
   }
-  BOOL empty = !_loading && _filteredConversations.count == 0;
+  BOOL searchingOlder = query.length > 0 && _cursor.length > 0 && !_moreConversationsFailed;
+  BOOL empty = !_loading && !searchingOlder && _filteredConversations.count == 0;
   _emptyTitleLabel.hidden = !empty;
   _emptySubtitleLabel.hidden = !empty;
   _emptyTitleLabel.text = _showingRequests ? NFBTweetieLocalizedString(@"DIRECT_MESSAGE_INBOX_UNTRUSTED_EMPTY_STATE_TITLE", @"Your message requests are empty") : @"No messages yet";
   _emptySubtitleLabel.text = _showingRequests ? NFBTweetieLocalizedString(@"DM_INBOX_REQUESTS_EMPTY_MESSAGE", @"Incoming messages from people you don't follow will show up here, and you'll be able to accept or ignore them") : @"Your Bluesky conversations will show up here.";
+  if (query.length > 0) {
+    _emptyTitleLabel.text = @"No results";
+    _emptySubtitleLabel.text = @"Try another name or message.";
+  }
   [_tableView reloadData];
+  [self updateConversationPagingFooter];
 }
 
 - (void)searchChanged:(UITextField *)field {
   (void)field;
   [self applySearchFilter];
+  [self scheduleConversationPrefetch];
 }
 
 - (void)newMessageTapped {
@@ -4642,11 +4841,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-  if (scrollView != _tableView) return;
-  CGFloat distanceFromBottom = scrollView.contentSize.height - scrollView.contentOffset.y - CGRectGetHeight(scrollView.bounds);
-  if (distanceFromBottom < 160.0 && _cursor.length > 0) {
-    [self loadMoreConversationsIfNeeded];
-  }
+  if (scrollView == _tableView && (scrollView.isDragging || scrollView.isDecelerating)) [self scheduleConversationPrefetch];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -4957,8 +5152,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   void (^finishWithConversation)(NSDictionary *, NSError *) = ^(NSDictionary *value, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (error || !value) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBTweetieLocalizedString(@"DM_NETWORK_ERROR_TITLE", @"Something went wrong. Check your connection and try again.")
-                                                                       message:error.localizedDescription
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:NFBChatErrorIsPermissionDenied(error) ? @"Messages" : NFBTweetieLocalizedString(@"DM_NETWORK_ERROR_TITLE", @"Something went wrong. Check your connection and try again.")
+                                                                       message:NFBChatPresentedErrorMessage(error)
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NFBTweetieOKTitle() style:UIAlertActionStyleCancel handler:nil]];
         [viewController presentViewController:alert animated:YES completion:nil];

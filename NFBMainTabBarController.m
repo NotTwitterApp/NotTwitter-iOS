@@ -91,7 +91,7 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 @end
 @implementation NFBBackTransition
 - (NSTimeInterval)transitionDuration:(id<UIViewControllerContextTransitioning>)context {
-  return UIAccessibilityIsReduceMotionEnabled() ? 0.15 : 0.32;
+  return UIAccessibilityIsReduceMotionEnabled() ? 0.15 : 0.4;
 }
 - (void)animateTransition:(id<UIViewControllerContextTransitioning>)context {
   UIView *from = [context viewForKey:UITransitionContextFromViewKey];
@@ -100,14 +100,15 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
   CGRect finalFrame = [context finalFrameForViewController:destination];
   CGFloat width = CGRectGetWidth(context.containerView.bounds);
   to.frame = finalFrame;
-  to.transform = CGAffineTransformMakeTranslation(-width / 3.0, 0.0);
+  CGFloat direction = context.containerView.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft ? -1.0 : 1.0;
+  to.transform = CGAffineTransformMakeTranslation(-direction * width / 3.0, 0.0);
   [context.containerView insertSubview:to belowSubview:from];
   UIView *shade = [[UIView alloc] initWithFrame:to.bounds];
   shade.backgroundColor = UIColor.blackColor;
   shade.alpha = 0.12;
   [to addSubview:shade];
   [UIView animateWithDuration:[self transitionDuration:context] delay:0 options:UIViewAnimationOptionCurveLinear animations:^{
-    from.transform = CGAffineTransformMakeTranslation(width, 0.0);
+    from.transform = CGAffineTransformMakeTranslation(direction * width, 0.0);
     to.transform = CGAffineTransformIdentity;
     shade.alpha = 0.0;
   } completion:^(BOOL finished) {
@@ -122,6 +123,7 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 @interface NFBNavigationController : UINavigationController <UIGestureRecognizerDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) UIPanGestureRecognizer *nfbFullWidthBackPanGestureRecognizer;
 @property (nonatomic, strong) UIPercentDrivenInteractiveTransition *nfbBackInteraction;
+@property (nonatomic, assign) BOOL nfbBackTransitionInFlight;
 @end
 
 @implementation NFBNavigationController
@@ -155,12 +157,15 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 }
 
 - (void)configureInteractivePopGesture {
-  if (self.nfbBackInteraction) return;
+  if (self.nfbBackTransitionInFlight) return;
   self.interactivePopGestureRecognizer.enabled = self.viewControllers.count > 1;
   self.interactivePopGestureRecognizer.delegate = self;
   if (!self.nfbFullWidthBackPanGestureRecognizer) {
     self.nfbFullWidthBackPanGestureRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(nfbFullWidthBackPanned:)];
     self.nfbFullWidthBackPanGestureRecognizer.cancelsTouchesInView = YES;
+    self.nfbFullWidthBackPanGestureRecognizer.maximumNumberOfTouches = 1;
+    self.nfbFullWidthBackPanGestureRecognizer.delaysTouchesBegan = NO;
+    self.nfbFullWidthBackPanGestureRecognizer.allowedScrollTypesMask = UIScrollTypeMaskAll;
     self.nfbFullWidthBackPanGestureRecognizer.delegate = self;
     [self.view addGestureRecognizer:self.nfbFullWidthBackPanGestureRecognizer];
     [self.nfbFullWidthBackPanGestureRecognizer requireGestureRecognizerToFail:self.interactivePopGestureRecognizer];
@@ -170,19 +175,37 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 
 - (void)nfbFullWidthBackPanned:(UIPanGestureRecognizer *)gesture {
   CGFloat width = MAX(1.0, CGRectGetWidth(self.view.bounds));
-  CGFloat progress = MIN(1.0, MAX(0.0, [gesture translationInView:self.view].x / width));
+  CGFloat direction = self.view.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft ? -1.0 : 1.0;
+  CGFloat progress = MIN(1.0, MAX(0.0, direction * [gesture translationInView:self.view].x / width));
   if (gesture.state == UIGestureRecognizerStateBegan) {
-    if (self.viewControllers.count <= 1 || self.transitionCoordinator) return;
+    if (self.viewControllers.count <= 1 || self.transitionCoordinator || self.nfbBackTransitionInFlight) return;
+    self.nfbBackTransitionInFlight = YES;
+    [self nfbStopVerticalScrollingAtPoint:[gesture locationInView:self.view]];
     self.nfbBackInteraction = [[UIPercentDrivenInteractiveTransition alloc] init];
     self.nfbBackInteraction.completionCurve = UIViewAnimationCurveEaseOut;
     [self popViewControllerAnimated:YES];
+    [self.nfbBackInteraction updateInteractiveTransition:progress];
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
     [self.nfbBackInteraction updateInteractiveTransition:progress];
   } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
-    BOOL finish = NFBShouldFinishSwipe(progress, [gesture velocityInView:self.view].x, gesture.state != UIGestureRecognizerStateEnded);
+    if (!self.nfbBackInteraction) return;
+    BOOL finish = NFBBackSwipeShouldFinish(progress, direction * [gesture velocityInView:self.view].x, gesture.state != UIGestureRecognizerStateEnded);
+    self.nfbBackInteraction.completionSpeed = 0.99;
+    self.nfbBackInteraction.completionCurve = UIViewAnimationCurveEaseInOut;
     if (finish) [self.nfbBackInteraction finishInteractiveTransition];
     else [self.nfbBackInteraction cancelInteractiveTransition];
-    self.nfbBackInteraction = nil;
+    // Keep the interaction alive until didShow, including a cancelled pop.
+  }
+}
+
+- (void)nfbStopVerticalScrollingAtPoint:(CGPoint)point {
+  for (UIView *view = [self.view hitTest:point withEvent:nil]; view && view != self.view; view = view.superview) {
+    if (![view isKindOfClass:UIScrollView.class]) continue;
+    UIScrollView *scroll = (UIScrollView *)view;
+    if (!scroll.scrollEnabled || scroll.contentSize.width > CGRectGetWidth(scroll.bounds) + 1.0 || scroll.zoomScale > scroll.minimumZoomScale + 0.01) continue;
+    [scroll setContentOffset:scroll.contentOffset animated:NO];
+    scroll.panGestureRecognizer.enabled = NO;
+    scroll.panGestureRecognizer.enabled = YES;
   }
 }
 
@@ -198,6 +221,8 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
   (void)navigationController;
   (void)viewController;
   (void)animated;
+  self.nfbBackInteraction = nil;
+  self.nfbBackTransitionInFlight = NO;
   [self configureInteractivePopGesture];
   [[NSNotificationCenter defaultCenter] postNotificationName:NFBNavigationStackDidChangeNotification object:self];
 }
@@ -205,24 +230,30 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
   if (gestureRecognizer == self.interactivePopGestureRecognizer || gestureRecognizer == self.nfbFullWidthBackPanGestureRecognizer) {
     if (self.viewControllers.count <= 1) return NO;
-    if (self.transitionCoordinator) return NO;
+    if (self.transitionCoordinator || self.nfbBackTransitionInFlight || self.presentedViewController) return NO;
     CGPoint velocity = [(UIPanGestureRecognizer *)gestureRecognizer velocityInView:self.view];
+    CGFloat direction = self.view.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft ? -1.0 : 1.0;
     if (gestureRecognizer == self.nfbFullWidthBackPanGestureRecognizer) {
       CGPoint point = [gestureRecognizer locationInView:self.view];
-      if (NFBTouchIsInHorizontalScroller(self.view, point)) return NO;
+      if (NFBTouchIsInHorizontalScrollerForVelocity(self.view, point, velocity)) return NO;
       id<NFBHorizontalPagingSurface> top = (id)self.topViewController;
       if ([top respondsToSelector:@selector(nfb_canPageHorizontallyWithVelocity:)] && [top nfb_canPageHorizontallyWithVelocity:velocity]) return NO;
     }
-    if (fabs(velocity.x) + fabs(velocity.y) > 1.0) {
-      if (velocity.x <= 0.0 || fabs(velocity.x) < fabs(velocity.y) * 1.12) return NO;
+    if (gestureRecognizer == self.nfbFullWidthBackPanGestureRecognizer) {
+      if (!NFBBackSwipeShouldBegin(direction * velocity.x, velocity.y)) return NO;
+    } else if (direction * velocity.x < 0.0) {
+      return NO;
     }
   }
   return YES;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-  if (gestureRecognizer == self.nfbFullWidthBackPanGestureRecognizer || otherGestureRecognizer == self.nfbFullWidthBackPanGestureRecognizer) return NO;
-  if (gestureRecognizer == self.interactivePopGestureRecognizer || otherGestureRecognizer == self.interactivePopGestureRecognizer) return NO;
+  if (gestureRecognizer == self.nfbFullWidthBackPanGestureRecognizer && gestureRecognizer.state == UIGestureRecognizerStatePossible &&
+      [otherGestureRecognizer.view isKindOfClass:UIScrollView.class]) {
+    UIScrollView *scroll = (UIScrollView *)otherGestureRecognizer.view;
+    return scroll.contentSize.width <= CGRectGetWidth(scroll.bounds) + 1.0 && scroll.zoomScale <= scroll.minimumZoomScale + 0.01;
+  }
   return NO;
 }
 

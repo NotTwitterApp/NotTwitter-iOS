@@ -67,10 +67,10 @@ tools are already on `PATH`.
 ```
 
 The helper performs a clean release build and packages the app in `packages/`.
-For version 1.0, the output is:
+For version 1.1, the output is:
 
 ```text
-packages/com.nottwitter.atproto_1.0.ipa
+packages/com.nottwitter.atproto_1.1.ipa
 ```
 
 Import that IPA into your preferred sideloading tool. A successful build confirms
@@ -92,7 +92,7 @@ Replace `YOUR_CONNECTED_DEVICE_UDID` with the identifier reported by
 
 ```bash
 xtool install --usb --udid YOUR_CONNECTED_DEVICE_UDID \
-  packages/com.nottwitter.atproto_1.0.ipa
+  packages/com.nottwitter.atproto_1.1.ipa
 ```
 
 By default, the helper leaves the IPA bundle identifier as `com.nottwitter.atproto`
@@ -107,7 +107,16 @@ with `./build-linux.sh` does not require xtool.
 
 For a release, keep `CFBundleShortVersionString` in `Resources/Info.plist` and
 `Version` in `control` in sync. Increment `CFBundleVersion` in
-`Resources/Info.plist` for each new build. This release is **1.0, build 144**.
+`Resources/Info.plist` for each new build. This release is **1.1, build 152**.
+
+## Bookmark search
+
+Search Bookmarks filters saved post text as you type and loads older pages while
+searching. Use `from:alice` (short for `alice.bsky.social`),
+`from:@alice.bsky.social`, or a full custom-domain handle such as
+`from:alice.example` to filter by author. Combine it with text, for example
+`from:alice coffee`. Multiple `from:` filters match any of the named authors.
+Put text such as `"from:alice"` in quotes to search for it literally.
 
 ## Native networking
 
