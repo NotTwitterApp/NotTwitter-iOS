@@ -3,6 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class NFBMediaViewerViewController;
+@class NFBMediaTransitionSource;
 
 @protocol NFBMediaViewerViewControllerDelegate <NSObject>
 @optional
@@ -14,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface NFBMediaViewerViewController : UIViewController
 
 @property (nonatomic, weak, nullable) id<NFBMediaViewerViewControllerDelegate> delegate;
+@property (nonatomic, strong, nullable) NFBMediaTransitionSource *transitionSource;
 
 - (instancetype)initWithProfileImageURL:(NSString *)url previewImage:(nullable UIImage *)image avatar:(BOOL)avatar sourceImageView:(UIImageView *)source;
 

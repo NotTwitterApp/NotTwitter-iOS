@@ -3965,11 +3965,12 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
   NFBOpenTweetTextURL(url, self);
 }
 
-- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index {
+- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *post = view.post ?: @{};
   NSArray<NSDictionary *> *mediaItems = [NFBAtprotoClient mediaItemsForPost:post];
   if (index >= mediaItems.count) return;
   NFBMediaViewerViewController *viewer = [[NFBMediaViewerViewController alloc] initWithMediaItems:mediaItems initialIndex:index post:post];
+  viewer.transitionSource = transitionSource;
   [self presentViewController:viewer animated:YES completion:nil];
 }
 

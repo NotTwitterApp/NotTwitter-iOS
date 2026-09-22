@@ -3,6 +3,7 @@
 #import "NFBMediaPreviewView.h"
 #import "NFBMediaAudioSession.h"
 #import "NFBMediaPresentationPolicy.h"
+#import "NFBMediaTransitionGeometry.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <AVKit/AVKit.h>
@@ -184,7 +185,7 @@ static CGFloat NFBViewerSmoothProgress(CGFloat progress) {
       if (@available(iOS 10.0, *)) player.automaticallyWaitsToMinimizeStalling = YES;
       NFBPlayerSurfaceView *playerView = [[NFBPlayerSurfaceView alloc] initWithFrame:self.mediaContentView.bounds];
       playerView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-      playerView.backgroundColor = UIColor.blackColor;
+      playerView.backgroundColor = UIColor.clearColor;
       playerView.player = player;
       [self.mediaContentView insertSubview:playerView aboveSubview:self.imageView];
       self.playerView = playerView;
@@ -710,7 +711,99 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
 }
 @end
 
+// Tweet photos, GIFs and video use TFNFullscreenMediaTransition's source-to-fit
+// geometry, 0.25-second default duration and ease-out curve (options 0x20001).
+@interface NFBMediaOpeningAnimator : NSObject <UIViewControllerAnimatedTransitioning>
+@property (nonatomic, weak) NFBMediaViewerViewController *viewer;
+@end
+@implementation NFBMediaOpeningAnimator
+- (NSTimeInterval)transitionDuration:(id<UIViewControllerContextTransitioning>)context {
+  (void)context;
+  return UIAccessibilityIsReduceMotionEnabled() ? 0.15 : NFBMediaOpeningDuration;
+}
+- (void)animateTransition:(id<UIViewControllerContextTransitioning>)context {
+  NFBMediaViewerViewController *viewer = self.viewer;
+  NFBMediaTransitionSource *source = viewer.transitionSource;
+  UIView *container = context.containerView;
+  UIView *viewerView = viewer.view;
+  viewerView.frame = [context finalFrameForViewController:viewer];
+  [container addSubview:viewerView];
+  [viewerView setNeedsLayout]; [viewerView layoutIfNeeded];
+  NSUInteger index = viewer.initialIndex;
+  NFBMediaViewerPage *page = index < viewer.pages.count ? viewer.pages[index] : nil;
+  [page setNeedsLayout]; [page layoutIfNeeded];
+  UIView *origin = source.view;
+  CGRect tileFrame = origin.window ? [origin convertRect:origin.bounds toView:container] : CGRectZero;
+  CGRect visibleFrame = CGRectIntersection(tileFrame, container.bounds);
+  for (UIView *ancestor = origin.superview; ancestor; ancestor = ancestor.superview) {
+    if (ancestor.clipsToBounds) visibleFrame = CGRectIntersection(visibleFrame, [ancestor convertRect:ancestor.bounds toView:container]);
+  }
+  CGRect fullFrame = [page.mediaContentView convertRect:page.mediaContentView.bounds toView:container];
+  BOOL zoom = !UIAccessibilityIsReduceMotionEnabled() && source.isStillValid && source.isStillValid() &&
+      (source.image || source.player) && !CGRectIsEmpty(visibleFrame) && !CGRectIsNull(visibleFrame) && !CGRectIsEmpty(fullFrame);
+  UIView *clip = nil;
+  UIImageView *image = nil;
+  AVPlayerLayer *video = nil;
+  BOOL originHidden = origin.hidden, mediaHidden = page.mediaContentView.hidden;
+  if (zoom) {
+    clip = [[UIView alloc] initWithFrame:visibleFrame];
+    clip.clipsToBounds = YES;
+    clip.layer.cornerRadius = source.cornerRadius;
+    NFBMediaTransitionRect crop = NFBMediaOpeningImageRect(
+        (NFBMediaTransitionRect){tileFrame.origin.x,tileFrame.origin.y,tileFrame.size.width,tileFrame.size.height},
+        (NFBMediaTransitionRect){visibleFrame.origin.x,visibleFrame.origin.y,visibleFrame.size.width,visibleFrame.size.height},
+        fullFrame.size.width / fullFrame.size.height);
+    image = [[UIImageView alloc] initWithImage:source.image];
+    image.contentMode = UIViewContentModeScaleToFill;
+    image.frame = CGRectMake(crop.x,crop.y,crop.width,crop.height);
+    [clip addSubview:image];
+    if (source.player) {
+      video = [AVPlayerLayer playerLayerWithPlayer:source.player];
+      video.videoGravity = AVLayerVideoGravityResizeAspect;
+      video.frame = image.bounds;
+      [image.layer addSublayer:video];
+    }
+    [container addSubview:clip];
+    origin.hidden = YES;
+    page.mediaContentView.hidden = YES;
+    CABasicAnimation *corners = [CABasicAnimation animationWithKeyPath:@"cornerRadius"];
+    corners.fromValue = @(source.cornerRadius); corners.toValue = @0;
+    corners.duration = [self transitionDuration:context];
+    corners.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [clip.layer addAnimation:corners forKey:@"mediaOpeningCorners"];
+    clip.layer.cornerRadius = 0;
+  }
+  viewerView.alpha = 0;
+  [UIView animateWithDuration:[self transitionDuration:context] delay:0
+      options:UIViewAnimationOptionLayoutSubviews | UIViewAnimationOptionCurveEaseOut animations:^{
+    viewerView.alpha = 1;
+    clip.frame = fullFrame;
+    image.frame = clip.bounds;
+    video.frame = image.bounds;
+  } completion:^(BOOL finished) {
+    (void)finished;
+    if (zoom) origin.hidden = originHidden;
+    page.mediaContentView.hidden = mediaHidden;
+    [clip removeFromSuperview];
+    viewerView.alpha = 1;
+    source.player = nil;
+    viewer.transitionSource = nil;
+    [context completeTransition:!context.transitionWasCancelled];
+  }];
+}
+@end
+
 @implementation NFBMediaViewerViewController
+
+- (void)setTransitionSource:(NFBMediaTransitionSource *)transitionSource {
+  _transitionSource = transitionSource;
+  if (!transitionSource.image || self.initialIndex >= self.mediaItems.count) return;
+  NSMutableArray *items = [self.mediaItems mutableCopy];
+  NSMutableDictionary *item = [items[self.initialIndex] mutableCopy];
+  item[@"previewImage"] = transitionSource.image;
+  items[self.initialIndex] = item;
+  self.mediaItems = items;
+}
 
 - (instancetype)initWithProfileImageURL:(NSString *)url previewImage:(UIImage *)image avatar:(BOOL)avatar sourceImageView:(UIImageView *)source {
   NSMutableDictionary *item = [@{@"type": @"photo", @"fullsizeURL": url ?: @"", @"profileAvatar": @(avatar), @"profilePhoto": @YES} mutableCopy];
@@ -725,10 +818,14 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
 
 - (id<UIViewControllerAnimatedTransitioning>)animationControllerForPresentedController:(UIViewController *)presented presentingController:(UIViewController *)presenting sourceController:(UIViewController *)source {
   (void)presented; (void)presenting; (void)source;
-  NFBProfilePhotoAnimator *animator = [NFBProfilePhotoAnimator new]; animator.viewer = self; animator.presenting = YES; return animator;
+  if (self.profileSourceImageView) {
+    NFBProfilePhotoAnimator *animator = [NFBProfilePhotoAnimator new]; animator.viewer = self; animator.presenting = YES; return animator;
+  }
+  NFBMediaOpeningAnimator *animator = [NFBMediaOpeningAnimator new]; animator.viewer = self; return animator;
 }
 - (id<UIViewControllerAnimatedTransitioning>)animationControllerForDismissedController:(UIViewController *)dismissed {
   (void)dismissed;
+  if (!self.profileSourceImageView) return nil;
   NFBProfilePhotoAnimator *animator = [NFBProfilePhotoAnimator new]; animator.viewer = self; animator.presenting = NO; return animator;
 }
 
@@ -747,6 +844,7 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
     _post = [post copy] ?: @{};
     _playbackRate = 1.0;
     _lastPlaybackIndex = -1;
+    self.transitioningDelegate = self;
     self.modalPresentationStyle = UIModalPresentationOverFullScreen;
     self.modalPresentationCapturesStatusBarAppearance = YES;
     self.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;

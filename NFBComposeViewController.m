@@ -5119,7 +5119,7 @@ static NSString * const NFBComposeSuggestionCellIdentifier = @"NFBComposeSuggest
   self.conversationLabel = [[UILabel alloc] init];
   self.conversationLabel.translatesAutoresizingMaskIntoConstraints = NO;
   self.conversationLabel.textColor = NFBColorAccent();
-  self.conversationLabel.font = NFBFont(14.0, NFBFontWeightHeavy);
+  self.conversationLabel.font = NFBFont(14.0, NFBFontWeightBold);
 
   UIView *conversationBottomBorder = [[UIView alloc] init];
   conversationBottomBorder.translatesAutoresizingMaskIntoConstraints = NO;
@@ -5183,14 +5183,14 @@ static NSString * const NFBComposeSuggestionCellIdentifier = @"NFBComposeSuggest
     [self.conversationControl.leadingAnchor constraintEqualToAnchor:accessory.leadingAnchor],
     [self.conversationControl.trailingAnchor constraintEqualToAnchor:accessory.trailingAnchor],
     [self.conversationControl.heightAnchor constraintEqualToConstant:44.0],
-    [self.conversationIconView.leadingAnchor constraintEqualToAnchor:self.conversationControl.leadingAnchor constant:68.0],
+    [self.conversationIconView.leadingAnchor constraintEqualToAnchor:self.conversationControl.leadingAnchor constant:16.0],
     [self.conversationIconView.centerYAnchor constraintEqualToAnchor:self.conversationControl.centerYAnchor],
     [self.conversationIconView.widthAnchor constraintEqualToConstant:18.0],
     [self.conversationIconView.heightAnchor constraintEqualToConstant:18.0],
     [self.conversationLabel.leadingAnchor constraintEqualToAnchor:self.conversationIconView.trailingAnchor constant:8.0],
     [self.conversationLabel.centerYAnchor constraintEqualToAnchor:self.conversationControl.centerYAnchor],
     [self.conversationLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.conversationControl.trailingAnchor constant:-16.0],
-    [conversationBottomBorder.leadingAnchor constraintEqualToAnchor:self.conversationControl.leadingAnchor constant:68.0],
+    [conversationBottomBorder.leadingAnchor constraintEqualToAnchor:self.conversationControl.leadingAnchor],
     [conversationBottomBorder.trailingAnchor constraintEqualToAnchor:self.conversationControl.trailingAnchor],
     [conversationBottomBorder.bottomAnchor constraintEqualToAnchor:self.conversationControl.bottomAnchor],
     [conversationBottomBorder.heightAnchor constraintEqualToConstant:1.0 / UIScreen.mainScreen.scale],
@@ -7155,6 +7155,7 @@ static NSString * const NFBComposeSuggestionCellIdentifier = @"NFBComposeSuggest
       preview[@"videoURL"] = url.absoluteString;
     }
     NFBMediaViewerViewController *viewer = [[NFBMediaViewerViewController alloc] initWithMediaItems:@[preview] initialIndex:0];
+    viewer.transitionSource = [view transitionSourceForItemAtIndex:index];
     [self presentViewController:viewer animated:YES completion:nil];
     return;
   }

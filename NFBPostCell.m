@@ -683,22 +683,23 @@
 }
 
 - (NSAttributedString *)replyContextAttributedStringForFeedItem:(NSDictionary *)item post:(NSDictionary *)post {
-  BOOL showReplyContext = [item[@"_nfbShowReplyContext"] respondsToSelector:@selector(boolValue)] && [item[@"_nfbShowReplyContext"] boolValue];
+  // Thread rows explicitly suppress this when the connected parent is already visible.
+  // Normal timeline envelopes do not carry this presentation override.
+  BOOL showReplyContext = ![item[@"_nfbShowReplyContext"] respondsToSelector:@selector(boolValue)] || [item[@"_nfbShowReplyContext"] boolValue];
   if (!showReplyContext) return nil;
   NSDictionary *record = [post[@"record"] isKindOfClass:NSDictionary.class] ? post[@"record"] : @{};
   if (![record[@"reply"] isKindOfClass:NSDictionary.class]) return nil;
   NSDictionary *parentPost = [NFBAtprotoClient replyParentPostFromFeedItem:item];
   NSDictionary *parentAuthor = [parentPost[@"author"] isKindOfClass:NSDictionary.class] ? parentPost[@"author"] : nil;
   NSString *handle = parentAuthor.count > 0 ? [NFBAtprotoClient handleForProfile:parentAuthor] : @"";
-  if (handle.length == 0) return nil;
-  NSString *target = [@"@" stringByAppendingString:handle];
+  NSString *target = handle.length > 0 ? [@"@" stringByAppendingString:handle] : @"a post";
   NSString *prefix = @"Replying to ";
   NSString *text = [prefix stringByAppendingString:target];
   NSMutableAttributedString *attributed = [[NSMutableAttributedString alloc] initWithString:text attributes:@{
     NSForegroundColorAttributeName: NFBColorSecondaryText(),
     NSFontAttributeName: self.replyContextLabel.font ?: NFBFont(NFBIPAMetricValue(NFBIPAMetricTimelineMetaFontSize), NFBFontWeightRegular)
   }];
-  [attributed addAttribute:NSForegroundColorAttributeName value:NFBColorAccent() range:NSMakeRange(prefix.length, target.length)];
+  if (handle.length > 0) [attributed addAttribute:NSForegroundColorAttributeName value:NFBColorAccent() range:NSMakeRange(prefix.length, target.length)];
   return attributed;
 }
 
@@ -897,8 +898,8 @@
 
 - (void)mediaPreviewView:(NFBMediaPreviewView *)view didSelectItemAtIndex:(NSUInteger)index {
   (void)view;
-  if ([self.delegate respondsToSelector:@selector(postCell:didTapMediaAtIndex:)]) {
-    [self.delegate postCell:self didTapMediaAtIndex:index];
+  if ([self.delegate respondsToSelector:@selector(postCell:didTapMediaAtIndex:transitionSource:)]) {
+    [self.delegate postCell:self didTapMediaAtIndex:index transitionSource:[view transitionSourceForItemAtIndex:index]];
   }
 }
 
@@ -938,10 +939,10 @@
   }
 }
 
-- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index {
+- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   (void)view;
-  if ([self.delegate respondsToSelector:@selector(postCell:didTapQuotedMediaAtIndex:)]) {
-    [self.delegate postCell:self didTapQuotedMediaAtIndex:index];
+  if ([self.delegate respondsToSelector:@selector(postCell:didTapQuotedMediaAtIndex:transitionSource:)]) {
+    [self.delegate postCell:self didTapQuotedMediaAtIndex:index transitionSource:transitionSource];
   }
 }
 

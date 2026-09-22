@@ -759,3 +759,135 @@ installed over USB. Installation-proxy lookup confirmed Not Twitter 1.1/build
 `/home/eric/Documents/Not Twitter/Not Twitter 1.1 (Build 152).ipa`, SHA-256
 `cf15f2b64e6f3075146178f7602edfced8460ae00c564497cb037a6cea633199`.
 The packaged binary contains the linked-post resolver and display-record keys.
+
+
+## Composer and Home feedback (1.1 build 153)
+
+Inspected Twitter 9.67's `T1TweetComposeViewController`
+`_t1_updateConversationControlContainerFrameForNumberOfLines:origin:fitSize:`
+(0x561d8 in T1Twitter): the conversation control uses a 16-point inset and
+full-width separator. The app's 68-point inset was incorrectly borrowed from
+the tweet text column. The reply control now uses 16 points and the divider
+spans its container. Its label uses Bold instead of Heavy.
+
+`TFNScrollingSegmentedViewController._tfn_updateFont` (0x899afc in
+TwitterSPMMigration) supplies one `normalBoldFont` to the label bar. Home tabs
+now share Bold in both states and retain the same horizontal padding when
+selected. A per-navigation-item appearance removes the extra separator between
+the title bar and the tabs; the bottom tab separator remains.
+
+`TFNNavigationController.navigationBarCollapsedHeight` (0x8d9948) returns zero;
+its scroll callbacks track expansion/collapse and restore the expanded state.
+This UIKit implementation uses `hidesBarsOnSwipe` on Home, explicitly binds the
+vertical feed on supported OS versions, restores the bar at the top and on exit,
+and leaves feed tabs available. The horizontal tab strip and preview table no
+longer compete for status-bar scroll-to-top. UIKit owns the collapse animation;
+this is not a port of Twitter's private animation engine or accessory collapse.
+
+The missing reply context came from a profile-only opt-in flag in `NFBPostCell`.
+Ordinary timeline replies now show their parent handle by default; thread rows
+can still explicitly suppress the label when their connected parent is visible.
+Unavailable parents show “Replying to a post” without inventing an account name.
+
+Validation: the production-method runtime fixture first failed on an ordinary
+feed reply and now passes for feed/profile envelopes, explicit thread suppression,
+non-replies and unavailable parents. Existing composer source checks, search
+paging and back-gesture runtime tests pass. Reference geometry assertions and
+`git diff --check` pass. The arm64 IPA builds without warnings. No live on-device
+visual or collapse-animation comparison was performed.
+
+Documents artifact: `Not Twitter 1.1 (Build 153).ipa`, SHA-256
+`59428711b545436526175f5f4bd8fc36198b122f7d8196012f899551a652ef3d`.
+Release notes include all four feedback fixes.
+
+Delivery: USB installation succeeded; installation-proxy lookup confirmed
+Not Twitter 1.1/build 153 on the paired phone.
+
+
+## Media opening and feed names (1.2 build 154)
+
+Inspected the supplied Twitter 9.67 IPA, specifically
+`TFNFullscreenMediaTransition` in TwitterSPMMigration:
+
+- `TFNFullscreenMediaTransitionDefaultDuration` at 0x2ccc558 is 0.25 seconds.
+- `_toFullScreenAnimationBlock:` at 0x8c25b0 and its invocation at 0x8c2968
+  animate source geometry into the target frame with options 0x20001
+  (LayoutSubviews | CurveEaseOut), while bringing background alpha to one.
+- `_sourceFrameContentMode`, `_sourceFrameContentsRect`, source clipping and
+  `_cornerRadiusAnimationFrom:to:` establish the crop and corner treatment.
+- `TFNTwitterAccount(T1Performance).fullscreenMediaTransitionDuration` at
+  0x1e50e8 accepts a feature-switch override; this app uses the IPA's default.
+
+The previous generic crossfade for tweet media is replaced by a source-to-fit
+opening animator. The tapped preview explicitly supplies its image/player,
+geometry and validity through cell/quote delegates, including reader-mode tweet
+threads, actor-list tweets, shared quotes in DMs, and composer GIF previews.
+The opening clip preserves aspect-fill crop, clips to visible ancestors and the
+window, expands to the selected fullscreen page, and removes rounded corners.
+The paused inline AVPlayer is retained during the transition so the video path
+can display its current frame; the fullscreen player retains the existing saved
+playback position. Invalid/missing sources and Reduce Motion use a fade. Profile
+photos retain their separate reference-derived 0.175-second animator. Existing
+swipe-to-dismiss behavior is unchanged. This adapts the reference's opening
+geometry and default timing; private staged exclusion/rotation transitions are
+not ported. Live device rendering and video-frame handoff remain unverified.
+
+Feed tabs measure the full label against their content width when tapped. A
+truncated label opens a full-name dialog after switching; tapping an already
+selected truncated tab also opens it. Short names preserve normal selection.
+
+Validation: the production animator runtime harness covers selected-page
+geometry, image/video sources, partial clipping, invalid source and reduced-motion
+fallbacks, timing/options, and cancellation cleanup. C geometry tests cover square
+video crops, portrait clipping and missing dimensions. The production feed-tab
+handler passes selected/unselected truncation, regular tabs and modal-conflict
+cases. Back-swipe, search-paging, linked-post, reply-context and composer checks
+pass. The arm64 IPA builds without warnings; packaged version is 1.2/build 154.
+
+Documents artifact: `Not Twitter 1.2 (Build 154).ipa`, SHA-256
+`705b67cd9798ecc7737619faae2306c2e9d1a003dcd2649464043155faf1115c`. Release notes are saved as `Release Notes 1.2.md` beside it.
+
+Delivery: USB installation succeeded. Installation-proxy lookup confirmed
+Not Twitter 1.2/build 154 on the paired iPhone.
+
+
+## In-place feed title expansion (1.2 build 155)
+
+Replaces build 154's full-name dialog with in-place tab expansion. A tap on a
+truncated tab raises its minimum/maximum width to the measured full text width
+plus the existing 16-point padding on each side. This also works for the current
+tab. The horizontal strip lays out again and scrolls the title's beginning into
+view; titles wider than the screen remain horizontally scrollable. Expanded
+widths last for the lifetime of those tab buttons and reset when tabs rebuild.
+No modal is presented. Short titles and normal feed selection are unchanged.
+
+The production tap-handler runtime test covers selected/unselected expansion,
+short names, repeat taps, unrelated constraints and leading-edge scrolling.
+The arm64 build and diff checks pass without warnings. UIKit layout has not been
+visually checked on-device. Version remains 1.2; build is 155.
+
+Documents copy: `Not Twitter 1.2 (Build 155).ipa`, SHA-256
+`2e132b5ce50fa69f98d627193691312f64fceb2166046bea495d583fca4ff9b7`. Release notes updated beside it.
+
+USB installation succeeded; installation-proxy lookup confirmed Not Twitter
+1.2/build 155 on the paired iPhone.
+
+
+## Collapse inactive feed titles (1.2 build 156)
+
+Expanded tabs return to the normal 128-point minimum / 176-point maximum width
+when another feed becomes selected. This runs in the shared selection update for
+taps, committed swipes and programmatic changes. The selected title remains
+expanded during same-feed updates; returning to an old feed keeps it shortened
+until tapped again. Layout is refreshed before scrolling the new selection.
+
+The production handler regression covers expand, same-feed retention, switch,
+return without expansion and re-expansion, plus short names and unrelated
+constraints. The arm64 build and diff checks pass without warnings. No live
+on-device visual check was performed.
+
+Documents copy: `Not Twitter 1.2 (Build 156).ipa`, SHA-256
+`762761256e7125e8910923ddc1f94ffb2b45c2265f61b633ee2bff685f4d9bbd`. Release notes updated beside it.
+
+USB installation succeeded; installation-proxy lookup confirmed Not Twitter
+1.2/build 156 on the paired iPhone.

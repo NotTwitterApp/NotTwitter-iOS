@@ -999,12 +999,35 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
 }
 
+- (void)configureHomeNavigationAppearance {
+  if (self.kind != NFBTimelineKindHome) return;
+  // The reference treats the title bar and feed selector as one header:
+  // only the separator below the tabs is visible.
+  UINavigationBarAppearance *appearance = [self.navigationController.navigationBar.standardAppearance copy];
+  appearance.shadowColor = UIColor.clearColor;
+  self.navigationItem.standardAppearance = appearance;
+  self.navigationItem.scrollEdgeAppearance = appearance;
+  self.navigationItem.compactAppearance = appearance;
+}
+
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
   if (self.searchPager) {
     [self loadSearchPagesNearIndex:self.searchTab];
     self.searchPager.userInteractionEnabled = NO;
     [self.searchPages[self.searchTab] beginAppearanceTransition:YES animated:animated];
+  }
+  [self configureHomeNavigationAppearance];
+  if (self.kind == NFBTimelineKindHome) {
+    // Explicitly identify the vertical feed, rather than the horizontal tab scroller.
+    // Selector availability avoids the Linux toolchain's missing OS-version helper.
+    if ([self respondsToSelector:@selector(setContentScrollView:forEdge:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+      [self setContentScrollView:self.tableView forEdge:NSDirectionalRectEdgeTop];
+#pragma clang diagnostic pop
+    }
+    self.navigationController.hidesBarsOnSwipe = YES;
   }
   [self configurePushedBackButtonIfNeeded];
   [self configurePushedProfileBackButtonIfNeeded];
@@ -1024,6 +1047,10 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [self setSearchPageInteractionEnabled:YES];
     self.searchHostAppeared = NO;
     [self.searchPages[self.searchTab] beginAppearanceTransition:NO animated:animated];
+  }
+  if (self.kind == NFBTimelineKindHome) {
+    self.navigationController.hidesBarsOnSwipe = NO;
+    [self.navigationController setNavigationBarHidden:NO animated:animated];
   }
   [self dismissFeedResourceMenuAnimated:NO];
   [self finishFeedResourceDragPersisting:NO];
@@ -1637,6 +1664,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 - (void)configureHomeFeedSwipeGestures {
   if (!self.homeFeedPreviewTableView) {
     self.homeFeedPreviewTableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.homeFeedPreviewTableView.scrollsToTop = NO;
     self.homeFeedPreviewTableView.translatesAutoresizingMaskIntoConstraints = NO;
     self.homeFeedPreviewTableView.dataSource = self;
     self.homeFeedPreviewTableView.delegate = self;
@@ -2093,6 +2121,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   self.homeTabsScrollView.translatesAutoresizingMaskIntoConstraints = NO;
   self.homeTabsScrollView.showsHorizontalScrollIndicator = NO;
   self.homeTabsScrollView.alwaysBounceHorizontal = YES;
+  self.homeTabsScrollView.scrollsToTop = NO;
   self.homeTabsScrollView.backgroundColor = NFBColorBackground();
 
   self.homeTabsStack = [[UIStackView alloc] init];
@@ -2148,7 +2177,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   button.translatesAutoresizingMaskIntoConstraints = NO;
   [button setTitle:title forState:UIControlStateNormal];
   [button setTitleColor:selected ? NFBColorText() : NFBColorSecondaryText() forState:UIControlStateNormal];
-  button.titleLabel.font = NFBFont(15.0, selected ? NFBFontWeightHeavy : NFBFontWeightBold);
+  button.titleLabel.font = NFBFont(15.0, NFBFontWeightBold);
   button.titleLabel.numberOfLines = 1;
   button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   button.titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -2156,6 +2185,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   button.contentEdgeInsets = UIEdgeInsetsMake(0.0, 16.0, 0.0, 16.0);
   NSLayoutConstraint *minimumWidth = [button.widthAnchor constraintGreaterThanOrEqualToConstant:128.0];
   NSLayoutConstraint *maximumWidth = [button.widthAnchor constraintLessThanOrEqualToConstant:176.0];
+  minimumWidth.identifier = @"nfbFeedTabMinimumWidth";
+  maximumWidth.identifier = @"nfbFeedTabMaximumWidth";
   maximumWidth.priority = UILayoutPriorityDefaultHigh;
   minimumWidth.active = YES;
   maximumWidth.active = YES;
@@ -2230,13 +2261,33 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [self updateHomeTabsSelection];
 }
 
+- (void)collapseInactiveHomeFeedTabs {
+  BOOL changed = NO;
+  for (UIButton *button in self.homeTabButtons) {
+    if (button.tag == self.selectedHomeFeedIndex) continue;
+    for (NSLayoutConstraint *constraint in button.constraints) {
+      CGFloat width;
+      if ([constraint.identifier isEqualToString:@"nfbFeedTabMinimumWidth"]) width = 128.0;
+      else if ([constraint.identifier isEqualToString:@"nfbFeedTabMaximumWidth"]) width = 176.0;
+      else continue;
+      if (constraint.constant != width) {
+        constraint.constant = width;
+        changed = YES;
+      }
+    }
+  }
+  if (changed) [self.homeTabsView layoutIfNeeded];
+}
+
 - (void)updateHomeTabsSelection {
+  // Shared by tab taps, completed swipes and programmatic feed changes.
+  [self collapseInactiveHomeFeedTabs];
   [self.homeTabButtons enumerateObjectsUsingBlock:^(UIButton *button, NSUInteger index, BOOL *stop) {
     (void)stop;
     BOOL selected = (NSInteger)index == self.selectedHomeFeedIndex;
     [button setTitleColor:selected ? NFBColorText() : NFBColorSecondaryText() forState:UIControlStateNormal];
-    button.titleLabel.font = NFBFont(15.0, selected ? NFBFontWeightHeavy : NFBFontWeightBold);
-    button.contentEdgeInsets = UIEdgeInsetsMake(0.0, selected ? 18.0 : 16.0, 0.0, selected ? 18.0 : 16.0);
+    button.titleLabel.font = NFBFont(15.0, NFBFontWeightBold);
+    button.contentEdgeInsets = UIEdgeInsetsMake(0.0, 16.0, 0.0, 16.0);
   }];
   if (self.selectedHomeFeedIndex < (NSInteger)self.homeTabButtons.count) {
     UIButton *button = self.homeTabButtons[(NSUInteger)self.selectedHomeFeedIndex];
@@ -2251,8 +2302,26 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)homeFeedTabTapped:(UIButton *)sender {
-  if (sender.tag == self.selectedHomeFeedIndex) return;
-  [self switchToHomeFeedIndex:sender.tag direction:0 animated:NO];
+  [sender layoutIfNeeded];
+  NSString *fullName = [sender titleForState:UIControlStateNormal] ?: @"";
+  CGFloat textWidth = [fullName sizeWithAttributes:@{NSFontAttributeName:sender.titleLabel.font}].width;
+  CGFloat availableWidth = CGRectGetWidth([sender contentRectForBounds:sender.bounds]);
+  BOOL truncated = textWidth > availableWidth + 0.5;
+  if (sender.tag != self.selectedHomeFeedIndex) [self switchToHomeFeedIndex:sender.tag direction:0 animated:NO];
+  if (truncated) {
+    CGFloat expandedWidth = ceil(textWidth) + sender.contentEdgeInsets.left + sender.contentEdgeInsets.right;
+    for (NSLayoutConstraint *constraint in sender.constraints) {
+      if ([constraint.identifier isEqualToString:@"nfbFeedTabMinimumWidth"] ||
+          [constraint.identifier isEqualToString:@"nfbFeedTabMaximumWidth"]) {
+        constraint.constant = MAX(176.0, expandedWidth);
+      }
+    }
+    [self.homeTabsView layoutIfNeeded];
+    // Very long names remain readable by scrolling the strip from the title's start.
+    CGRect visibleTitle = sender.frame;
+    visibleTitle.size.width = MIN(CGRectGetWidth(visibleTitle), CGRectGetWidth(self.homeTabsScrollView.bounds));
+    [self.homeTabsScrollView scrollRectToVisible:visibleTitle animated:YES];
+  }
 }
 
 - (NSNumber *)homeFeedCacheKeyForIndex:(NSInteger)index {
@@ -4596,6 +4665,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     NFBApplyNavigationAppearance(self.navigationController);
   }
   [self configureNavigation];
+  [self configureHomeNavigationAppearance];
   [self updateProfileCoverChromeTheme];
   self.profileNavigationAppearanceConfigured = NO;
   [self configureProfileNavigationAppearanceIfNeeded];
@@ -5477,7 +5547,13 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
   if (scrollView == self.searchTabsScrollView) { [self updateSearchPageIndicator]; return; }
   if (scrollView == self.homeFeedPreviewTableView) return;
-  if (scrollView == self.tableView) [self updateFeedNavigationForScrollOffset];
+  if (scrollView == self.tableView) {
+    [self updateFeedNavigationForScrollOffset];
+    if (self.kind == NFBTimelineKindHome && self.navigationController.topViewController == self &&
+        scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top && self.navigationController.navigationBarHidden) {
+      [self.navigationController setNavigationBarHidden:NO animated:YES];
+    }
+  }
   [self updateProfileNavigationForScrollOffset];
 }
 
@@ -5812,9 +5888,10 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [[self postActionCoordinator] presentMoreMenuForPost:post sourceView:nil];
 }
 
-- (void)presentMediaItems:(NSArray<NSDictionary *> *)mediaItems initialIndex:(NSUInteger)index post:(NSDictionary *)post {
+- (void)presentMediaItems:(NSArray<NSDictionary *> *)mediaItems initialIndex:(NSUInteger)index post:(NSDictionary *)post transitionSource:(NFBMediaTransitionSource *)transitionSource {
   if (mediaItems.count == 0) return;
   NFBMediaViewerViewController *viewer = [[NFBMediaViewerViewController alloc] initWithMediaItems:mediaItems initialIndex:index post:post];
+  viewer.transitionSource = transitionSource;
   viewer.delegate = self;
   [self presentViewController:viewer animated:YES completion:nil];
 }
@@ -5870,9 +5947,9 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   NFBOpenTweetTextURL(url, self);
 }
 
-- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index {
+- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *post = [NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}];
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post transitionSource:transitionSource];
 }
 
 - (void)postCellDidTapExternalCard:(NFBPostCell *)cell {
@@ -5893,10 +5970,10 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [self.navigationController pushViewController:detail animated:YES];
 }
 
-- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index {
+- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *post = [NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}];
   NSDictionary *quotedPost = [NFBAtprotoClient quotedPostForPost:post];
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{}];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{} transitionSource:transitionSource];
 }
 
 - (void)postCellDidTapQuotedExternalCard:(NFBPostCell *)cell {

@@ -768,9 +768,10 @@ typedef NS_ENUM(NSUInteger, NFBActorListMode) {
   NFBOpenTweetTextURL(url, self);
 }
 
-- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index {
+- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *post = [NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}];
   NFBMediaViewerViewController *viewer = [[NFBMediaViewerViewController alloc] initWithMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post];
+  viewer.transitionSource = transitionSource;
   viewer.delegate = self;
   [self presentViewController:viewer animated:YES completion:nil];
 }
@@ -796,9 +797,10 @@ typedef NS_ENUM(NSUInteger, NFBActorListMode) {
   [self.navigationController pushViewController:detail animated:YES];
 }
 
-- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index {
+- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *quotedPost = [NFBAtprotoClient quotedPostForPost:[NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}]];
   NFBMediaViewerViewController *viewer = [[NFBMediaViewerViewController alloc] initWithMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{}];
+  viewer.transitionSource = transitionSource;
   viewer.delegate = self;
   [self presentViewController:viewer animated:YES completion:nil];
 }

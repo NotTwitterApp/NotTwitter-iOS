@@ -3,6 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class NFBPostCell;
+@class NFBMediaTransitionSource;
 
 @protocol NFBPostCellDelegate <NSObject>
 @optional
@@ -16,11 +17,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)postCellDidTapAuthor:(NFBPostCell *)cell;
 - (void)postCellDidTapReposter:(NFBPostCell *)cell;
 - (void)postCell:(NFBPostCell *)cell didTapLinkURL:(NSURL *)url;
-- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index;
+- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)postCellDidTapExternalCard:(NFBPostCell *)cell;
 - (void)postCellDidTapExternalCardWebsite:(NFBPostCell *)cell;
 - (void)postCellDidTapQuotedPost:(NFBPostCell *)cell;
-- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index;
+- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)postCellDidTapQuotedExternalCard:(NFBPostCell *)cell;
 - (void)postCellDidTapQuotedExternalCardWebsite:(NFBPostCell *)cell;
 @end

@@ -86,6 +86,7 @@
   /home/eric/Developer/NotTwitter-iOS/NFBMediaPreviewView.h \
   /home/eric/Developer/NotTwitter-iOS/NFBMediaAudioSession.h \
   /home/eric/Developer/NotTwitter-iOS/NFBMediaPresentationPolicy.h \
+  /home/eric/Developer/NotTwitter-iOS/NFBMediaTransitionGeometry.h \
   /home/eric/Developer/NotTwitter-iOS/NFBAtprotoClient.h \
   /home/eric/Developer/NotTwitter-iOS/NFBAtprotoSession.h \
   /home/eric/Developer/NotTwitter-iOS/NFBBlueskyLoginViewController.h \
@@ -267,6 +268,8 @@
 /home/eric/Developer/NotTwitter-iOS/NFBMediaAudioSession.h:
 
 /home/eric/Developer/NotTwitter-iOS/NFBMediaPresentationPolicy.h:
+
+/home/eric/Developer/NotTwitter-iOS/NFBMediaTransitionGeometry.h:
 
 /home/eric/Developer/NotTwitter-iOS/NFBAtprotoClient.h:
 

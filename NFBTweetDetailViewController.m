@@ -36,12 +36,12 @@
 - (void)tweetDetailFocalCellDidTapAuthor:(NFBTweetDetailFocalCell *)cell;
 - (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapLinkURL:(NSURL *)url;
 - (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapMetricType:(NSString *)metricType;
-- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapMediaAtIndex:(NSUInteger)index;
+- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)tweetDetailFocalCellDidTapExternalCard:(NFBTweetDetailFocalCell *)cell;
 - (void)tweetDetailFocalCellDidTapExternalCardWebsite:(NFBTweetDetailFocalCell *)cell;
 - (void)tweetDetailFocalCellDidTapArticleNotifications:(NFBTweetDetailFocalCell *)cell;
 - (void)tweetDetailFocalCellDidTapQuotedPost:(NFBTweetDetailFocalCell *)cell;
-- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index;
+- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)tweetDetailFocalCellDidTapQuotedExternalCard:(NFBTweetDetailFocalCell *)cell;
 - (void)tweetDetailFocalCellDidTapQuotedExternalCardWebsite:(NFBTweetDetailFocalCell *)cell;
 @end
@@ -49,11 +49,11 @@
 @protocol NFBTweetDetailReaderCellDelegate <NSObject>
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapLinkURL:(NSURL *)url;
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapAuthorForPost:(NSDictionary *)post;
-- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post;
+- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapExternalCardForPost:(NSDictionary *)post;
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapExternalCardWebsiteForPost:(NSDictionary *)post;
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedPostForPost:(NSDictionary *)post;
-- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post;
+- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedExternalCardForPost:(NSDictionary *)post;
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedExternalCardWebsiteForPost:(NSDictionary *)post;
 @end
@@ -912,7 +912,7 @@
 
 - (void)mediaPreviewView:(NFBMediaPreviewView *)view didSelectItemAtIndex:(NSUInteger)index {
   (void)view;
-  [self.delegate tweetDetailFocalCell:self didTapMediaAtIndex:index];
+  [self.delegate tweetDetailFocalCell:self didTapMediaAtIndex:index transitionSource:[view transitionSourceForItemAtIndex:index]];
 }
 
 - (void)externalCardViewDidTapCard:(NFBExternalCardView *)view {
@@ -943,9 +943,9 @@
   [self.delegate tweetDetailFocalCell:self didTapLinkURL:url];
 }
 
-- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index {
+- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   (void)view;
-  [self.delegate tweetDetailFocalCell:self didTapQuotedMediaAtIndex:index];
+  [self.delegate tweetDetailFocalCell:self didTapQuotedMediaAtIndex:index transitionSource:transitionSource];
 }
 
 - (void)quotedPostViewDidTapExternalCard:(NFBQuotedPostView *)view {
@@ -1280,7 +1280,7 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
 }
 
 - (void)mediaPreviewView:(NFBMediaPreviewView *)view didSelectItemAtIndex:(NSUInteger)index {
-  [self.delegate tweetDetailReaderCell:self didTapMediaAtIndex:index post:[self postForMediaView:view]];
+  [self.delegate tweetDetailReaderCell:self didTapMediaAtIndex:index post:[self postForMediaView:view] transitionSource:[view transitionSourceForItemAtIndex:index]];
 }
 
 - (void)externalCardViewDidTapCard:(NFBExternalCardView *)view {
@@ -1308,8 +1308,8 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   [self.delegate tweetDetailReaderCell:self didTapLinkURL:url];
 }
 
-- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index {
-  [self.delegate tweetDetailReaderCell:self didTapQuotedMediaAtIndex:index post:[self postForQuotedPostView:view]];
+- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
+  [self.delegate tweetDetailReaderCell:self didTapQuotedMediaAtIndex:index post:[self postForQuotedPostView:view] transitionSource:transitionSource];
 }
 
 - (void)quotedPostViewDidTapExternalCard:(NFBQuotedPostView *)view {
@@ -2174,9 +2174,10 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   [[self postActionCoordinator] presentMoreMenuForPost:post sourceView:nil];
 }
 
-- (void)presentMediaItems:(NSArray<NSDictionary *> *)mediaItems initialIndex:(NSUInteger)index post:(NSDictionary *)post {
+- (void)presentMediaItems:(NSArray<NSDictionary *> *)mediaItems initialIndex:(NSUInteger)index post:(NSDictionary *)post transitionSource:(NFBMediaTransitionSource *)transitionSource {
   if (mediaItems.count == 0) return;
   NFBMediaViewerViewController *viewer = [[NFBMediaViewerViewController alloc] initWithMediaItems:mediaItems initialIndex:index post:post];
+  viewer.transitionSource = transitionSource;
   viewer.delegate = self;
   [self presentViewController:viewer animated:YES completion:nil];
 }
@@ -2202,9 +2203,9 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   [self pushProfileForPost:post];
 }
 
-- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post {
+- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post transitionSource:(NFBMediaTransitionSource *)transitionSource {
   (void)cell;
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post transitionSource:transitionSource];
 }
 
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapExternalCardForPost:(NSDictionary *)post {
@@ -2223,10 +2224,10 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   if (quotedPost.count > 0) [self pushDetailForPost:quotedPost];
 }
 
-- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post {
+- (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index post:(NSDictionary *)post transitionSource:(NFBMediaTransitionSource *)transitionSource {
   (void)cell;
   NSDictionary *quotedPost = [NFBAtprotoClient quotedPostForPost:post ?: @{}];
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{}];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{} transitionSource:transitionSource];
 }
 
 - (void)tweetDetailReaderCell:(NFBTweetDetailReaderCell *)cell didTapQuotedExternalCardForPost:(NSDictionary *)post {
@@ -2414,9 +2415,9 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   NFBOpenTweetTextURL(url, self);
 }
 
-- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index {
+- (void)postCell:(NFBPostCell *)cell didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *post = [NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}];
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:post] initialIndex:index post:post transitionSource:transitionSource];
 }
 
 - (void)postCellDidTapExternalCard:(NFBPostCell *)cell {
@@ -2437,10 +2438,10 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   [self.navigationController pushViewController:detail animated:YES];
 }
 
-- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index {
+- (void)postCell:(NFBPostCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *post = [NFBAtprotoClient postFromFeedItem:cell.feedItem ?: @{}];
   NSDictionary *quotedPost = [NFBAtprotoClient quotedPostForPost:post];
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{}];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{} transitionSource:transitionSource];
 }
 
 - (void)postCellDidTapQuotedExternalCard:(NFBPostCell *)cell {
@@ -2508,8 +2509,8 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   [self.navigationController pushViewController:list animated:YES];
 }
 
-- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapMediaAtIndex:(NSUInteger)index {
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:cell.post ?: @{}] initialIndex:index post:cell.post ?: @{}];
+- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:cell.post ?: @{}] initialIndex:index post:cell.post ?: @{} transitionSource:transitionSource];
 }
 
 - (void)tweetDetailFocalCellDidTapExternalCard:(NFBTweetDetailFocalCell *)cell {
@@ -2552,9 +2553,9 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
   [self.navigationController pushViewController:detail animated:YES];
 }
 
-- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index {
+- (void)tweetDetailFocalCell:(NFBTweetDetailFocalCell *)cell didTapQuotedMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource {
   NSDictionary *quotedPost = [NFBAtprotoClient quotedPostForPost:cell.post ?: @{}];
-  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{}];
+  [self presentMediaItems:[NFBAtprotoClient mediaItemsForPost:quotedPost ?: @{}] initialIndex:index post:quotedPost ?: @{} transitionSource:transitionSource];
 }
 
 - (void)tweetDetailFocalCellDidTapQuotedExternalCard:(NFBTweetDetailFocalCell *)cell {

@@ -334,8 +334,8 @@
 
 - (void)mediaPreviewView:(NFBMediaPreviewView *)view didSelectItemAtIndex:(NSUInteger)index {
   (void)view;
-  if ([self.delegate respondsToSelector:@selector(quotedPostView:didTapMediaAtIndex:)]) {
-    [self.delegate quotedPostView:self didTapMediaAtIndex:index];
+  if ([self.delegate respondsToSelector:@selector(quotedPostView:didTapMediaAtIndex:transitionSource:)]) {
+    [self.delegate quotedPostView:self didTapMediaAtIndex:index transitionSource:[view transitionSourceForItemAtIndex:index]];
   }
 }
 

@@ -3,12 +3,13 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class NFBQuotedPostView;
+@class NFBMediaTransitionSource;
 
 @protocol NFBQuotedPostViewDelegate <NSObject>
 @optional
 - (void)quotedPostViewDidTapPost:(NFBQuotedPostView *)view;
 - (void)quotedPostView:(NFBQuotedPostView *)view didTapLinkURL:(NSURL *)url;
-- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index;
+- (void)quotedPostView:(NFBQuotedPostView *)view didTapMediaAtIndex:(NSUInteger)index transitionSource:(NFBMediaTransitionSource *)transitionSource;
 - (void)quotedPostViewDidTapExternalCard:(NFBQuotedPostView *)view;
 - (void)quotedPostViewDidTapExternalCardWebsite:(NFBQuotedPostView *)view;
 @end

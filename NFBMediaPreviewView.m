@@ -17,6 +17,9 @@ static CGFloat const NFBMediaComposerRailTileCornerRadius = 12.0;
 
 static UIImage *NFBAnimatedImageWithData(NSData *data);
 
+@implementation NFBMediaTransitionSource
+@end
+
 @interface NFBMediaOverlayButton : UIButton
 @end
 @implementation NFBMediaOverlayButton
@@ -911,6 +914,32 @@ static UIImage *NFBAnimatedImageWithData(NSData *data) {
   }
   if (count > 0) lastFrame = CGRectUnion(lastFrame, [self railFrameForIndex:count - 1]);
   self.scrollView.contentSize = CGSizeMake(MAX(CGRectGetMaxX(lastFrame), CGRectGetWidth(self.scrollView.bounds) + 1.0), CGRectGetHeight(self.scrollView.bounds));
+}
+
+- (NFBMediaTransitionSource *)transitionSourceForItemAtIndex:(NSUInteger)index {
+  if (index >= self.mediaItems.count) return nil;
+  for (NFBMediaPreviewTile *tile in self.tiles) {
+    if (tile.mediaIndex != index || tile.warningActive || !tile.window) continue;
+    NFBMediaTransitionSource *source = [NFBMediaTransitionSource new];
+    source.view = tile.imageView;
+    source.image = tile.imageView.image;
+    id displayedContents = tile.imageView.layer.presentationLayer.contents;
+    if (displayedContents && source.image && CFGetTypeID((__bridge CFTypeRef)displayedContents) == CGImageGetTypeID()) {
+      source.image = [UIImage imageWithCGImage:(__bridge CGImageRef)displayedContents scale:source.image.scale orientation:source.image.imageOrientation];
+    }
+    source.player = tile.inlinePlayer;
+    source.cornerRadius = tile.layer.cornerRadius;
+    if (self.tiles.count == 1) source.cornerRadius = MAX(source.cornerRadius, self.layer.cornerRadius);
+    NSDictionary *item = self.mediaItems[index];
+    __weak typeof(self) weakSelf = self;
+    __weak NFBMediaPreviewTile *weakTile = tile;
+    source.isStillValid = ^BOOL{
+      return weakTile.window && weakTile.mediaIndex == index && !weakTile.warningActive &&
+          index < weakSelf.mediaItems.count && [weakSelf.mediaItems[index] isEqual:item];
+    };
+    return source;
+  }
+  return nil;
 }
 
 - (void)tileTapped:(NFBMediaPreviewTile *)tile {

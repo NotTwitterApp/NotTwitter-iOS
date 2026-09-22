@@ -67,10 +67,10 @@ tools are already on `PATH`.
 ```
 
 The helper performs a clean release build and packages the app in `packages/`.
-For version 1.1, the output is:
+For version 1.2, the output is:
 
 ```text
-packages/com.nottwitter.atproto_1.1.ipa
+packages/com.nottwitter.atproto_1.2.ipa
 ```
 
 Import that IPA into your preferred sideloading tool. A successful build confirms
@@ -92,7 +92,7 @@ Replace `YOUR_CONNECTED_DEVICE_UDID` with the identifier reported by
 
 ```bash
 xtool install --usb --udid YOUR_CONNECTED_DEVICE_UDID \
-  packages/com.nottwitter.atproto_1.1.ipa
+  packages/com.nottwitter.atproto_1.2.ipa
 ```
 
 By default, the helper leaves the IPA bundle identifier as `com.nottwitter.atproto`
@@ -107,7 +107,7 @@ with `./build-linux.sh` does not require xtool.
 
 For a release, keep `CFBundleShortVersionString` in `Resources/Info.plist` and
 `Version` in `control` in sync. Increment `CFBundleVersion` in
-`Resources/Info.plist` for each new build. This release is **1.1, build 152**.
+`Resources/Info.plist` for each new build. This release is **1.2, build 156**.
 
 ## Bookmark search
 
