@@ -1,3 +1,4 @@
+#import "NFBTranslationView.h"
 #import "NFBTweetDetailViewController.h"
 #import "NFBThreadModel.h"
 
@@ -82,6 +83,7 @@
 @property (nonatomic, strong) UIButton *moreButton;
 @property (nonatomic, strong) UIButton *followButton;
 @property (nonatomic, strong) NFBInteractiveTextLabel *bodyLabel;
+@property (nonatomic, strong) NFBTranslationView *translationView;
 @property (nonatomic, strong) UIView *tombstoneView;
 @property (nonatomic, strong) NFBInteractiveTextLabel *tombstoneTitleLabel;
 @property (nonatomic, strong) NFBInteractiveTextLabel *tombstoneSubtitleLabel;
@@ -139,6 +141,7 @@
 
 - (void)prepareForReuse {
   [super prepareForReuse];
+  [self.translationView reset];
   self.post = nil;
   self.avatarView.image = [self.class placeholderAvatarImage];
   [self.mediaView configureWithMediaItems:@[]];
@@ -275,6 +278,7 @@
   self.headerRow.spacing = 12.0;
   self.headerRow.distribution = UIStackViewDistributionFill;
 
+  self.translationView = [NFBTranslationView new];
   self.bodyLabel = [[NFBInteractiveTextLabel alloc] init];
   self.bodyLabel.font = NFBFont(NFBIPAMetricValue(NFBIPAMetricDetailBodyFontSize), NFBFontWeightRegular);
   self.bodyLabel.textColor = NFBColorText();
@@ -398,7 +402,7 @@
 
   self.bottomBorder = [self borderView];
 
-  UIStackView *contentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.tombstoneView, self.headerRow, self.bodyLabel, self.mediaView, self.externalCardView, self.articleNotificationButton, self.quotedPostView, self.footerLabel, self.metricsContainer, self.actionsContainer]];
+  UIStackView *contentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.tombstoneView, self.headerRow, self.bodyLabel, self.translationView, self.mediaView, self.externalCardView, self.articleNotificationButton, self.quotedPostView, self.footerLabel, self.metricsContainer, self.actionsContainer]];
   contentStack.translatesAutoresizingMaskIntoConstraints = NO;
   contentStack.axis = UILayoutConstraintAxisVertical;
   contentStack.alignment = UIStackViewAlignmentFill;
@@ -609,6 +613,7 @@
   self.handleLabel.textColor = NFBColorSecondaryText();
   NFBIPAApplyFollowsYouBadgeAppearance(self.followsYouLabel);
   self.bodyLabel.textColor = NFBColorText();
+  [self.translationView applyTheme];
   if (self.post) self.bodyLabel.attributedText = [self bodyAttributedStringForPost:self.post];
   NFBApplyFramedTombstoneAppearance(self.tombstoneView, self.tombstoneTitleLabel, self.tombstoneSubtitleLabel, 15.0, 15.0);
   self.footerLabel.textColor = NFBColorSecondaryText();
@@ -683,6 +688,7 @@
   [NFBPostActionCoordinator configureFollowButton:self.followButton profile:author overDarkBackground:NO];
   self.bodyLabel.attributedText = [self bodyAttributedStringForPost:self.post];
   self.bodyLabel.hidden = self.bodyLabel.attributedText.length == 0;
+  [self.translationView configureWithPost:self.post bodyFont:self.bodyLabel.font];
   self.footerLabel.text = [self footerTextForPost:self.post];
 
   NSNumber *repostCount = [self numberFromPostKey:@"repostCount"];
@@ -758,6 +764,7 @@
   self.tombstoned = YES;
   self.headerRow.hidden = YES;
   self.bodyLabel.hidden = YES;
+  [self.translationView reset];
   self.mediaView.hidden = YES;
   self.externalCardView.hidden = YES;
   self.articleNotificationButton.hidden = YES;
@@ -1172,6 +1179,9 @@ static NSInteger const NFBTweetDetailReaderSeparatorTag = 93045;
     [strongSelf.delegate tweetDetailReaderCell:strongSelf didTapLinkURL:url];
   };
   if (bodyLabel.attributedText.length > 0) [section addArrangedSubview:bodyLabel];
+  NFBTranslationView *translation = [NFBTranslationView new];
+  [section addArrangedSubview:translation];
+  [translation configureWithPost:post bodyFont:bodyLabel.font];
 
   NSArray<NSDictionary *> *mediaItems = NFBModerationMediaItemsByApplyingWarnings([NFBAtprotoClient mediaItemsForPost:post], post);
   if (mediaItems.count > 0) {

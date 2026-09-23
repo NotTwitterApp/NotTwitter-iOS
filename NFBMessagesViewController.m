@@ -1,3 +1,4 @@
+#import "NFBPostLinkResolver.h"
 #import "NFBPostLink.h"
 #import "NFBChatPermission.h"
 #import "NFBChatPagination.h"
@@ -484,6 +485,7 @@ static NSDictionary *NFBChatSharedPostForMessage(NSDictionary *message);
 static CGFloat NFBSharedPostCardHeightForWidth(NSDictionary *post, CGFloat width) {
   if (post.count == 0 || width <= 0.0) return 0.0;
   NFBQuotedPostView *sizingView = [[NFBQuotedPostView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, 1.0)];
+  sizingView.translationEnabled = NO;
   [sizingView configureWithPost:post];
   [sizingView setNeedsLayout];
   [sizingView layoutIfNeeded];
@@ -677,16 +679,17 @@ static NSDictionary *NFBChatSharedPostForMessage(NSDictionary *message) {
   return [message[NFBChatSharedPostKey] isKindOfClass:NSDictionary.class] ? message[NFBChatSharedPostKey] : nil;
 }
 
-static NSString *NFBChatMessageDisplayText(NSDictionary *message) {
-  NSString *text = NFBChatMessageText(message);
-  if (NFBChatSharedPostForMessage(message).count == 0) return text;
-  NSMutableString *displayText = [text mutableCopy] ?: [NSMutableString string];
-  for (NSString *token in NFBChatURLTokensInText(text)) {
-    NSString *uri = NFBChatPostURIFromURLString(token);
-    if (uri.length == 0 || ![uri isEqualToString:NFBChatSharedPostURIFromMessage(message)]) continue;
-    [displayText replaceOccurrencesOfString:token withString:@"" options:0 range:NSMakeRange(0, displayText.length)];
+static NSDictionary *NFBChatMessageDisplayRecord(NSDictionary *message) {
+  NSDictionary *record = NFBChatRawMessage(message);
+  if (NFBStringValue(record[@"text"]).length == 0) {
+    record = @{@"text":NFBChatMessageText(message)};
   }
-  return [displayText stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  if (NFBChatSharedPostForMessage(message).count == 0) return record;
+  return NFBRecordByHidingLinkedURL(record, NFBChatSharedPostURIFromMessage(message));
+}
+
+static NSString *NFBChatMessageDisplayText(NSDictionary *message) {
+  return NFBStringValue(NFBChatMessageDisplayRecord(message)[@"text"]);
 }
 
 static NSString *NFBChatPostAuthorHandle(NSDictionary *post) {
@@ -3816,8 +3819,8 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       body.font = NFBFont(NFBIPAMetricValue(NFBIPAMetricMessageBodyFontSize), NFBFontWeightRegular);
       body.textColor = mine ? UIColor.whiteColor : NFBColorText();
       body.text = text;
-      if (NFBChatURLTokensInText(text).count > 0) {
-        NSMutableAttributedString *linkedText = [NFBTweetBodyAttributedString(text, body.font) mutableCopy];
+      if (text.length > 0) {
+        NSMutableAttributedString *linkedText = [NFBMessageBodyAttributedString(NFBChatMessageDisplayRecord(message), body.font) mutableCopy];
         if (mine) [linkedText addAttribute:NSForegroundColorAttributeName value:UIColor.whiteColor range:NSMakeRange(0, linkedText.length)];
         [linkedText enumerateAttribute:NFBTextLinkURLAttributeName inRange:NSMakeRange(0, linkedText.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
           if (value) [linkedText addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
@@ -3839,6 +3842,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
       CGFloat cardX = mine ? width - 16.0 - cardWidth : 60.0;
       CGFloat cardY = contentBottom + (hasTextBubble ? 6.0 : 0.0);
       NFBQuotedPostView *cardView = [[NFBQuotedPostView alloc] initWithFrame:CGRectMake(cardX, cardY, cardWidth, cardHeight)];
+      cardView.translationEnabled = NO;
       cardView.delegate = self;
       cardView.tag = (NSInteger)index + 1;
       [cardView configureWithPost:sharedPost];
@@ -3853,6 +3857,7 @@ typedef void (^NFBMessageReactionMenuHandler)(NSString *action, NSString *value)
         CGFloat quotedY = contentBottom + 6.0;
         CGFloat quotedHeight = NFBSharedPostCardHeightForWidth(quotedPost, cardWidth);
         NFBQuotedPostView *quotedView = [[NFBQuotedPostView alloc] initWithFrame:CGRectMake(cardX, quotedY, cardWidth, quotedHeight)];
+        quotedView.translationEnabled = NO;
         quotedView.delegate = self;
         quotedView.tag = (NSInteger)index + 1;
         [quotedView configureWithPost:quotedPost];

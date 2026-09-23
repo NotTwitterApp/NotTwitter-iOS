@@ -1,6 +1,6 @@
 #import <AVFoundation/AVFoundation.h>
 
-// Muted playback mixes with other apps. Only an explicit unmute owns audio.
+// Muted previews mix with other apps. Fullscreen video and sound-on actions own audio.
 @interface NFBMediaAudioSession : NSObject
 + (void)prepareMutedPlayback;
 + (BOOL)hasAudioForPlayer:(AVPlayer *)player;

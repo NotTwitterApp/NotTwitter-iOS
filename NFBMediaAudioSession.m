@@ -34,7 +34,7 @@ static __weak AVPlayer *NFBAudiblePlayer;
   }
   if (NFBAudiblePlayer == player && !player.muted) return YES;
   if (NFBAudiblePlayer) [self stopPlayer:NFBAudiblePlayer];
-  // This path is called only by an explicit sound-on action.
+  // Fullscreen video or an explicit sound-on action requests playback audio.
   if (![session setCategory:AVAudioSessionCategoryPlayback mode:AVAudioSessionModeMoviePlayback options:0 error:nil] ||
       ![session setActive:YES error:nil]) {
     player.muted = YES;

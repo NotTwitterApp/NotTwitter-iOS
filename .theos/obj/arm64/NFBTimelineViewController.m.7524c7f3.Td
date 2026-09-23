@@ -20,7 +20,7 @@
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/net.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/darwin_c_xlocale.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/darwin_cdefs.modulemap \
-  /home/eric/Developer/NotTwitter-iOS/NFBSearchPagingScrollView.h \
+  /home/eric/Developer/NotTwitter-iOS/NFBEditProfileViewController.h \
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/rocketbootstrap/module.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/libundirect/module.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/libroot/module.modulemap \
@@ -82,6 +82,9 @@
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/AppList/module.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/compact_unwind_encoding.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/dyld.modulemap \
+  /home/eric/Developer/NotTwitter-iOS/NFBChromeGeometry.h \
+  /home/eric/Developer/NotTwitter-iOS/NFBTranslationView.h \
+  /home/eric/Developer/NotTwitter-iOS/NFBSearchPagingScrollView.h \
   /home/eric/Developer/NotTwitter-iOS/NFBGesturePolicy.h \
   /home/eric/Developer/NotTwitter-iOS/NFBSearchPagingPolicy.h \
   /home/eric/Developer/NotTwitter-iOS/NFBAdvancedSearchViewController.h \
@@ -154,7 +157,7 @@
 
 /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/darwin_cdefs.modulemap:
 
-/home/eric/Developer/NotTwitter-iOS/NFBSearchPagingScrollView.h:
+/home/eric/Developer/NotTwitter-iOS/NFBEditProfileViewController.h:
 
 /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/rocketbootstrap/module.modulemap:
 
@@ -277,6 +280,12 @@
 /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/compact_unwind_encoding.modulemap:
 
 /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/dyld.modulemap:
+
+/home/eric/Developer/NotTwitter-iOS/NFBChromeGeometry.h:
+
+/home/eric/Developer/NotTwitter-iOS/NFBTranslationView.h:
+
+/home/eric/Developer/NotTwitter-iOS/NFBSearchPagingScrollView.h:
 
 /home/eric/Developer/NotTwitter-iOS/NFBGesturePolicy.h:
 

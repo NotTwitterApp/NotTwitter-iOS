@@ -19,6 +19,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, weak, nullable) id<NFBQuotedPostViewDelegate> delegate;
 @property (nonatomic, strong, readonly, nullable) NSDictionary *post;
 
+// Disable for callers that lay out the card with a fixed, precomputed height.
+@property (nonatomic) BOOL translationEnabled;
+
 - (void)configureWithPost:(nullable NSDictionary *)post;
 - (void)applyTheme;
 

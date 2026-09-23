@@ -1,3 +1,4 @@
+#import "NFBChromeGeometry.h"
 #import "NFBMainTabBarController.h"
 #import "NFBGesturePolicy.h"
 
@@ -15,6 +16,18 @@
 static NSInteger const NFBTabBadgeViewTag = 93841;
 static NSInteger const NFBTabBadgeLabelTag = 93842;
 static NSString * const NFBNavigationStackDidChangeNotification = @"NFBNavigationStackDidChangeNotification";
+
+// Inspect public view types, without depending on UIKit's private class names.
+static UIImageView *NFBTabIconImageView(UIView *view) {
+  for (UIView *child in view.subviews) {
+    if (child.tag == NFBTabBadgeViewTag) continue;
+    if ([child isKindOfClass:UIImageView.class] && [(UIImageView *)child image] &&
+        CGRectGetWidth(child.bounds) >= 20 && CGRectGetWidth(child.bounds) <= 32) return (UIImageView *)child;
+    UIImageView *image = NFBTabIconImageView(child);
+    if (image) return image;
+  }
+  return nil;
+}
 
 static NSString *NFBNotificationStringForKeys(NSDictionary *dictionary, NSArray<NSString *> *keys) {
   if (![dictionary isKindOfClass:NSDictionary.class]) return @"";
@@ -263,7 +276,7 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 @property (nonatomic, assign) BOOL sideMenuPresentationInProgress;
 @property (nonatomic, strong) NFBSideMenuViewController *interactiveSideMenu;
 @property (nonatomic, strong) UIScreenEdgePanGestureRecognizer *leftEdgeMenuGestureRecognizer;
-@property (nonatomic, strong) UIVisualEffectView *nfbTabBarBackgroundView;
+@property (nonatomic, strong) UIView *nfbTabBarBackgroundView;
 @property (nonatomic, strong) UIView *nfbTabBarDividerView;
 @property (nonatomic, assign) NSUInteger currentHomeBadgeCount;
 @property (nonatomic, assign) NSUInteger currentNotificationBadgeCount;
@@ -431,6 +444,14 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
+  // Match the supplied opaque reference; keep the home-indicator safe area.
+  if (!self.tabBar.hidden && self.tabBar.superview) {
+    CGFloat height = NFBTabBarHeight(self.view.window.safeAreaInsets.bottom, self.traitCollection.verticalSizeClass == UIUserInterfaceSizeClassCompact);
+    CGRect frame = self.tabBar.frame;
+    frame.origin.y = CGRectGetHeight(self.tabBar.superview.bounds) - height;
+    frame.size.height = height;
+    if (!CGRectEqualToRect(self.tabBar.frame, frame)) self.tabBar.frame = frame;
+  }
   [self layoutIPATabBarChrome];
   [self updateLeftEdgeMenuGestureEnabled];
   [self applyCurrentTabBadges];
@@ -447,17 +468,15 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
 
 - (void)configureIPATabBarChrome {
   self.tabBar.clipsToBounds = NO;
-  self.tabBar.opaque = NO;
-  self.tabBar.backgroundColor = UIColor.clearColor;
+  self.tabBar.opaque = YES;
+  self.tabBar.backgroundColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
 
   if (!self.nfbTabBarBackgroundView) {
-    self.nfbTabBarBackgroundView = [[UIVisualEffectView alloc] initWithEffect:NFBIPATabBarBackgroundEffect()];
+    self.nfbTabBarBackgroundView = [[UIView alloc] initWithFrame:CGRectZero];
     self.nfbTabBarBackgroundView.userInteractionEnabled = NO;
     [self.tabBar insertSubview:self.nfbTabBarBackgroundView atIndex:0];
   }
-  self.nfbTabBarBackgroundView.effect = NFBIPATabBarBackgroundEffect();
   self.nfbTabBarBackgroundView.backgroundColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
-  self.nfbTabBarBackgroundView.contentView.backgroundColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
 
   if (!self.nfbTabBarDividerView) {
     self.nfbTabBarDividerView = [[UIView alloc] initWithFrame:CGRectZero];
@@ -506,7 +525,7 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
   UIImage *selectedImage = NFBTemplateIcon(definition.selectedIconName ?: definition.iconName);
   nav.tabBarItem = [[UITabBarItem alloc] initWithTitle:@"" image:image selectedImage:selectedImage];
   nav.tabBarItem.accessibilityLabel = definition.title;
-  nav.tabBarItem.imageInsets = UIEdgeInsetsMake(5.0, 0.0, -5.0, 0.0);
+  nav.tabBarItem.imageInsets = UIEdgeInsetsMake(9.0, 0.0, -9.0, 0.0);
   nav.tabBarItem.titlePositionAdjustment = UIOffsetMake(0.0, 300.0);
   NSDictionary *hiddenAttributes = @{
     NSForegroundColorAttributeName: UIColor.clearColor,
@@ -627,7 +646,7 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
     label = [[UILabel alloc] initWithFrame:CGRectZero];
     label.tag = NFBTabBadgeLabelTag;
     label.textAlignment = NSTextAlignmentCenter;
-    label.font = NFBFont(11.0, NFBFontWeightHeavy);
+    label.font = [NFBFont(12.0, NFBFontWeightRegular) fontWithSize:12.0];
     label.adjustsFontSizeToFitWidth = YES;
     label.minimumScaleFactor = 0.72;
     label.userInteractionEnabled = NO;
@@ -636,14 +655,20 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
     label = (UILabel *)[badge viewWithTag:NFBTabBadgeLabelTag];
   }
 
-  UIColor *accent = messageBadge ? NFBColorBlue() : NFBColorAccent();
+  (void)messageBadge;
+  UIColor *accent = NFBColorAccent();
+  // Anchor badges to the rendered icon, so the lower icon position and compact
+  // layouts do not leave badges floating at the old control-relative offset.
+  CGPoint iconCenter = CGPointMake(CGRectGetMidX(control.bounds), CGRectGetMidY(control.bounds));
+  UIImageView *icon = NFBTabIconImageView(control);
+  if (icon) iconCenter = [icon convertPoint:CGPointMake(CGRectGetMidX(icon.bounds), CGRectGetMidY(icon.bounds)) toView:control];
   if (dotOnly) {
     badge.backgroundColor = accent;
     badge.layer.borderWidth = 0.0;
     badge.layer.borderColor = nil;
     label.hidden = YES;
-    CGFloat size = 7.0;
-    badge.frame = CGRectMake(CGRectGetMidX(control.bounds) + 10.0, 9.0, size, size);
+    CGFloat size = 6.0;
+    badge.frame = CGRectMake(iconCenter.x + 8.0 - size / 2, iconCenter.y - 12.0 - size / 2, size, size);
     badge.layer.cornerRadius = size * 0.5;
     return;
   }
@@ -653,21 +678,20 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
   label.text = text;
   label.textColor = UIColor.whiteColor;
 
-  CGFloat height = messageBadge ? 17.0 : 18.0;
+  // TFNBadgeView: fixedSmallFont (12 regular), minimum height 16, text + 8,
+  // and an external 2pt background-colored border. T1TabView offsets its center
+  // 12pt right of the icon and places its bottom at the icon center.
+  CGFloat height = MAX(16.0, ceil(label.font.lineHeight));
   CGFloat textWidth = ceil([text sizeWithAttributes:@{NSFontAttributeName: label.font}].width);
-  CGFloat horizontalPadding = messageBadge ? 7.0 : 9.0;
-  CGFloat width = MAX(height, textWidth + horizontalPadding);
-  CGFloat originX = CGRectGetMidX(control.bounds) + (messageBadge ? 7.0 : 7.5);
-  CGFloat originY = 5.0;
-  badge.frame = CGRectMake(originX, originY, width, height);
-  badge.layer.cornerRadius = height * 0.5;
-  // Twitter 9.67 T1TabView uses a filled badge and an opaque edge matching
-  // the page background (black in Lights out), with white count text.
+  CGFloat width = MAX(height, textWidth + 8.0);
+  CGRect fillFrame = CGRectMake(iconCenter.x + 12.0 - width / 2, iconCenter.y - height, width, height);
+  badge.frame = CGRectInset(fillFrame, -2.0, -2.0);
+  badge.layer.cornerRadius = (height + 4.0) * 0.5;
   badge.backgroundColor = accent;
-  badge.layer.borderWidth = messageBadge ? 1.5 : 0.0;
-  badge.layer.borderColor = messageBadge ? NFBColorBackground().CGColor : nil;
+  badge.layer.borderWidth = 2.0;
+  badge.layer.borderColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground).CGColor;
   badge.layer.allowsEdgeAntialiasing = YES;
-  label.frame = badge.bounds;
+  label.frame = CGRectInset(badge.bounds, 2.0, 2.0);
 }
 
 - (void)themeChanged:(NSNotification *)notification {
@@ -861,8 +885,8 @@ static NSDictionary *NFBNotificationDictionaryForKeys(NSDictionary *dictionary, 
   }];
   if (index >= tabControls.count) return;
   UIControl *control = tabControls[index];
-  control.transform = CGAffineTransformMakeScale(0.92, 0.92);
-  [UIView animateWithDuration:0.46
+  control.transform = UIAccessibilityIsReduceMotionEnabled() ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.92, 0.92);
+  [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.46
                         delay:0.0
        usingSpringWithDamping:0.54
         initialSpringVelocity:0.62

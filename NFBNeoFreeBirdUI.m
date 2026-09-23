@@ -707,7 +707,8 @@ UIColor *NFBNeoFreeBirdAccentColor(void) {
 }
 
 UIColor *NFBNeoFreeBirdTabBarSelectedTintColor(void) {
-  return NFBNeoFreeBirdBoolForKey(@"tab_bar_theming", NO) ? NFBNeoFreeBirdAccentColor() : NFBColorText();
+  // Classic Twitter marks the selected tab with the chosen accent.
+  return NFBNeoFreeBirdAccentColor();
 }
 
 UIColor *NFBNeoFreeBirdTabBarNormalTintColor(void) {

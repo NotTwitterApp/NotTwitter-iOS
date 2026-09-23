@@ -194,6 +194,7 @@ UIFont *NFBFont(CGFloat size, NFBFontWeight weight);
 NSString *NFBShortCountString(NSInteger count);
 NSAttributedString *NFBTweetBodyAttributedString(NSString *_Nullable text, UIFont *font);
 NSAttributedString *NFBTweetBodyAttributedStringForPost(NSDictionary *_Nullable post, UIFont *font);
+NSAttributedString *NFBMessageBodyAttributedString(NSDictionary *record, UIFont *font);
 NSAttributedString *NFBComposerTextAttributedString(NSString *_Nullable text, UIFont *font);
 UIImage *_Nullable NFBTwemojiImageForEmoji(NSString *emoji);
 NSAttributedString *NFBAttributedStringByReplacingEmojiWithTwemoji(NSAttributedString *attributed, UIFont *font);

@@ -1,3 +1,4 @@
+#import "NFBTranslationView.h"
 #import "NFBRepostContext.h"
 #import "NFBPostCell.h"
 
@@ -28,6 +29,7 @@
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) UILabel *replyContextLabel;
 @property (nonatomic, strong) NFBInteractiveTextLabel *bodyLabel;
+@property (nonatomic, strong) NFBTranslationView *translationView;
 @property (nonatomic, strong) UIView *tombstoneView;
 @property (nonatomic, strong) NFBInteractiveTextLabel *tombstoneTitleLabel;
 @property (nonatomic, strong) NFBInteractiveTextLabel *tombstoneSubtitleLabel;
@@ -100,6 +102,7 @@
 
 - (void)prepareForReuse {
   [super prepareForReuse];
+  [self.translationView reset];
   [self applyTheme];
   self.avatarView.image = [self.class placeholderAvatarImage];
   [self.mediaView configureWithMediaItems:@[]];
@@ -256,6 +259,7 @@
   [self.replyContextLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
   [self.replyContextLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
 
+  self.translationView = [NFBTranslationView new];
   self.bodyLabel = [[NFBInteractiveTextLabel alloc] init];
   self.bodyLabel.translatesAutoresizingMaskIntoConstraints = NO;
   self.bodyLabel.font = NFBFont(NFBIPAMetricValue(NFBIPAMetricTimelineBodyFontSize), NFBFontWeightRegular);
@@ -352,7 +356,7 @@
   self.actionsRow.spacing = 0.0;
   [self.actionsRow setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
 
-  UIStackView *contentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.reasonLabel, self.tombstoneView, self.headerRow, self.replyContextLabel, self.bodyLabel, self.mediaView, self.externalCardView, self.quotedPostView, self.actionsRow]];
+  UIStackView *contentStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.reasonLabel, self.tombstoneView, self.headerRow, self.replyContextLabel, self.bodyLabel, self.translationView, self.mediaView, self.externalCardView, self.quotedPostView, self.actionsRow]];
   contentStack.translatesAutoresizingMaskIntoConstraints = NO;
   contentStack.axis = UILayoutConstraintAxisVertical;
   contentStack.spacing = 0.0;
@@ -620,6 +624,7 @@
     self.replyContextLabel.attributedText = [self replyContextAttributedStringForFeedItem:self.feedItem post:post];
   }
   NFBApplyFramedTombstoneAppearance(self.tombstoneView, self.tombstoneTitleLabel, self.tombstoneSubtitleLabel, 15.0, 15.0);
+  [self.translationView applyTheme];
   [self.mediaView applyTheme];
   [self.externalCardView applyTheme];
   [self.quotedPostView applyTheme];
@@ -744,6 +749,7 @@
   self.timeLabel.text = [NFBAtprotoClient relativeTimeForPost:post];
   self.bodyLabel.attributedText = [self bodyAttributedStringForPost:post];
   self.bodyLabel.hidden = self.bodyLabel.attributedText.length == 0;
+  [self.translationView configureWithPost:post bodyFont:self.bodyLabel.font];
   self.replyContextLabel.attributedText = [self replyContextAttributedStringForFeedItem:item post:post];
   self.replyContextLabel.hidden = self.replyContextLabel.attributedText.length == 0;
 
@@ -818,6 +824,7 @@
   self.replyContextLabel.hidden = YES;
   self.replyContextLabel.attributedText = nil;
   self.bodyLabel.hidden = YES;
+  [self.translationView reset];
   self.mediaView.hidden = YES;
   self.externalCardView.hidden = YES;
   self.quotedPostView.hidden = YES;

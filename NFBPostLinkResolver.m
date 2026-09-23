@@ -10,7 +10,7 @@ NSDictionary *NFBPostDisplayRecord(NSDictionary *post) {
   return NFBDictionary(display ?: [post objectForKey:@"record"]);
 }
 
-static NSDictionary *NFBRecordByHidingLinkedURL(NSDictionary *record, NSString *target) {
+NSDictionary *NFBRecordByHidingLinkedURL(NSDictionary *record, NSString *target) {
   NSString *text = NFBString([record objectForKey:@"text"]);
   NSData *utf8 = [text dataUsingEncoding:NSUTF8StringEncoding];
   NSMutableIndexSet *removed = [NSMutableIndexSet indexSet];

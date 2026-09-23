@@ -654,7 +654,7 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
 @property (nonatomic, assign) NSInteger lastPlaybackIndex;
 @property (nonatomic, assign) BOOL userPausedCurrentVideo;
 @property (nonatomic, assign) BOOL userForcedPlayback;
-@property (nonatomic, assign) BOOL userChangedMute;
+@property (nonatomic, assign) BOOL currentVideoMuted;
 @property (nonatomic, assign) BOOL wasPlayingBeforeBackground;
 
 @end
@@ -1406,6 +1406,7 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
     if (isfinite(duration) && CMTimeGetSeconds(player.currentTime) >= duration - 0.1) [player seekToTime:kCMTimeZero];
     self.userPausedCurrentVideo = NO;
     self.userForcedPlayback = YES;
+    [self prepareCurrentVideoAudio];
     [player playImmediatelyAtRate:self.playbackRate > 0.0 ? self.playbackRate : 1.0];
   } else {
     self.userPausedCurrentVideo = YES;
@@ -1419,8 +1420,8 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
 - (void)muteTapped {
   AVPlayer *player = [self currentPlayer];
   if (!player) return;
-  self.userChangedMute = YES;
-  [NFBMediaAudioSession setMuted:!player.muted forPlayer:player];
+  self.currentVideoMuted = !player.muted;
+  [NFBMediaAudioSession setMuted:self.currentVideoMuted forPlayer:player];
   [self updateVideoControlState];
 }
 
@@ -1607,7 +1608,7 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
     self.lastPlaybackIndex = (NSInteger)current;
     self.userPausedCurrentVideo = NO;
     self.userForcedPlayback = NO;
-    self.userChangedMute = NO;
+    self.currentVideoMuted = NO;
   }
   for (NSUInteger index = 0; index < self.pages.count; index++) {
     if (labs((long)index - (long)current) <= 1) [self.pages[index] loadImageIfNeeded];
@@ -1634,24 +1635,30 @@ typedef void (^NFBVideoOptionsSelectionHandler)(NSString *identifier);
   [self scheduleChromeAutoHide];
 }
 
+- (void)prepareCurrentVideoAudio {
+  // Preloaded neighbors and offscreen/background players must never take audio.
+  if (!self.view.window || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+  AVPlayer *player = [self currentPlayer];
+  BOOL silent = [[[self currentPage].item objectForKey:@"type"] isEqual:@"gif"] || ![NFBMediaAudioSession hasAudioForPlayer:player];
+  [NFBMediaAudioSession setMuted:self.currentVideoMuted || silent forPlayer:player];
+}
+
 - (void)playCurrentVideoIfNeeded {
   NSUInteger current = [self currentIndex];
+  // Release the previous page's audio before activating the selected video.
   for (NSUInteger index = 0; index < self.pages.count; index++) {
-    NFBMediaViewerPage *page = self.pages[index];
-    if (index == current) {
-      AVPlayer *player = page.player;
-      if (!player) continue;
-      if (!self.userChangedMute) player.muted = YES;
-      BOOL shouldPlay = self.userForcedPlayback || (!self.userPausedCurrentVideo && [self autoplayEnabledForCurrentVideo]);
-      if (shouldPlay) {
-        if (self.playbackRate > 0.0) [player playImmediatelyAtRate:self.playbackRate];
-        else [page playIfNeeded];
-      } else if (!self.userForcedPlayback) {
-        [player pause];
-      }
-    } else {
-      [page pause];
-    }
+    if (index != current) [self.pages[index] pause];
+  }
+  NFBMediaViewerPage *page = [self currentPage];
+  AVPlayer *player = page.player;
+  if (!player) return;
+  BOOL shouldPlay = self.userForcedPlayback || (!self.userPausedCurrentVideo && [self autoplayEnabledForCurrentVideo]);
+  if (shouldPlay) {
+    [self prepareCurrentVideoAudio];
+    if (self.playbackRate > 0.0) [player playImmediatelyAtRate:self.playbackRate];
+    else [page playIfNeeded];
+  } else if (!self.userForcedPlayback) {
+    [player pause];
   }
 }
 

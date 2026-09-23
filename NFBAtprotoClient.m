@@ -1,3 +1,5 @@
+#import "NFBProfileRecord.h"
+#import "NFBRichText.h"
 #import "NFBPostLinkResolver.h"
 #import "NFBPostLink.h"
 #import "NFBSearchQuery.h"
@@ -8,6 +10,8 @@
 #import "NFBMediaAttachmentPolicy.h"
 
 #import "NFBAtprotoSession.h"
+
+NSString * const NFBAtprotoProfileUpdatedNotification = @"NFBAtprotoProfileUpdatedNotification";
 
 NSString * const NFBAtprotoFeedListCacheDidInvalidateNotification = @"NFBAtprotoFeedListCacheDidInvalidateNotification";
 
@@ -68,50 +72,10 @@ static NSString *NFBClientStringByLimitingComposedCharacters(NSString *value, NS
   return end < limited.length ? [limited substringToIndex:end] : limited;
 }
 
-static NSRange NFBClientTrimmedURLRangeInText(NSString *text, NSRange range) {
-  if (range.location == NSNotFound || NSMaxRange(range) > text.length) return range;
-  NSCharacterSet *trailing = [NSCharacterSet characterSetWithCharactersInString:@".,!?;:)"];
-  while (range.length > 0) {
-    unichar character = [text characterAtIndex:NSMaxRange(range) - 1];
-    if (![trailing characterIsMember:character]) break;
-    range.length -= 1;
-  }
-  return range;
-}
-
-static NSInteger NFBClientUTF8ByteOffsetForUTF16Index(NSString *text, NSUInteger index) {
-  if (index == 0) return 0;
-  if (index > text.length) return -1;
-  NSString *prefix = [text substringToIndex:index];
-  return (NSInteger)[prefix dataUsingEncoding:NSUTF8StringEncoding].length;
-}
-
-static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
-  if (text.length == 0) return @[];
-  NSError *error = nil;
-  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)" options:0 error:&error];
-  if (error || !regex) return @[];
-  NSMutableArray<NSDictionary *> *facets = [NSMutableArray array];
-  NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-  for (NSTextCheckingResult *match in matches) {
-    if (match.numberOfRanges < 2) continue;
-    NSRange tokenRange = NFBClientTrimmedURLRangeInText(text, [match rangeAtIndex:1]);
-    if (tokenRange.location == NSNotFound || NSMaxRange(tokenRange) > text.length || tokenRange.length == 0) continue;
-    NSString *uri = [text substringWithRange:tokenRange];
-    if ([uri.lowercaseString hasPrefix:@"www."]) uri = [@"https://" stringByAppendingString:uri];
-    NSInteger byteStart = NFBClientUTF8ByteOffsetForUTF16Index(text, tokenRange.location);
-    NSInteger byteEnd = NFBClientUTF8ByteOffsetForUTF16Index(text, NSMaxRange(tokenRange));
-    if (byteStart < 0 || byteEnd <= byteStart) continue;
-    [facets addObject:@{
-      @"index": @{@"byteStart": @(byteStart), @"byteEnd": @(byteEnd)},
-      @"features": @[@{@"$type": @"app.bsky.richtext.facet#link", @"uri": uri}]
-    }];
-  }
-  return facets;
-}
-
 @interface NFBAtprotoClient ()
 @property (nonatomic, copy) NSString *postingAccountDID;
+@property (atomic) NSUInteger profileEditRevision;
+@property (nonatomic, strong) NSMutableDictionary *recentProfileEdits;
 
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableArray *> *standardSiteArticleRequests;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *resourceArrayCache;
@@ -132,7 +96,7 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
 - (NSArray<NSDictionary *> *)savedFeedItemsFromPreferences:(NSArray *)preferences;
 - (void)fetchPostViewsForURIs:(NSArray<NSString *> *)uris completion:(void (^)(NSDictionary<NSString *, NSDictionary *> *postsByURI, NSError *error))completion;
 - (void)fetchPostViewsForURIs:(NSArray<NSString *> *)uris offset:(NSUInteger)offset postsByURI:(NSMutableDictionary<NSString *, NSDictionary *> *)postsByURI firstError:(NSError *)firstError completion:(void (^)(NSDictionary<NSString *, NSDictionary *> *postsByURI, NSError *error))completion;
-- (void)fetchProfileRecordForDID:(NSString *)did completion:(void (^)(NSDictionary *record))completion;
+- (void)fetchProfileRecordForDID:(NSString *)did completion:(void (^)(NSDictionary *record, NSString *endpoint))completion;
 - (void)filterMessageableActors:(NSArray<NSDictionary *> *)actors limit:(NSUInteger)limit completion:(NFBAtprotoArrayCompletion)completion;
 - (void)messagePermissionForProfile:(NSDictionary *)profile completion:(void (^)(BOOL canMessage, BOOL followsViewer))completion;
 - (void)fetchChatLogMessagesForConversationID:(NSString *)conversationID cursor:(NSString *)cursor remainingPages:(NSUInteger)remainingPages messagesByID:(NSMutableDictionary<NSString *, NSDictionary *> *)messagesByID nextCursor:(NSString *)nextCursor completion:(NFBAtprotoArrayCompletion)completion;
@@ -1187,12 +1151,34 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   }];
 }
 
+- (void)acceptUpdatedProfile:(NSDictionary *)profile {
+  NSMutableDictionary *clean = [profile mutableCopy];
+  [clean removeObjectForKey:@"_nfbLoadedAvatar"];
+  [clean removeObjectForKey:@"_nfbLoadedBanner"];
+  NSString *did = NFBProfileString(clean[@"did"]);
+  if (!did.length || ![did isEqual:NFBAtprotoSession.sharedSession.did]) return;
+  @synchronized (self) {
+    self.profileEditRevision++;
+    if (!self.recentProfileEdits) self.recentProfileEdits = [NSMutableDictionary new];
+    self.recentProfileEdits[did] = clean;
+    [self.profileCache removeAllObjects]; [self.profileCacheDates removeAllObjects];
+    for (NSString *actor in @[did,NFBProfileString(clean[@"handle"])]) {
+      if (!actor.length) continue;
+      NSString *key = [self resourceCacheKeyWithName:@"profile" qualifier:actor.lowercaseString];
+      self.profileCache[key] = clean; self.profileCacheDates[key] = NSDate.date;
+    }
+    [NFBAtprotoSession.sharedSession updateProfileFromDictionary:clean];
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:NFBAtprotoProfileUpdatedNotification object:clean]; });
+}
+
 - (void)fetchProfileForActor:(NSString *)actor completion:(NFBAtprotoDictionaryCompletion)completion {
   if (actor.length == 0) {
     if (completion) completion(nil, [NSError errorWithDomain:@"NFBAtprotoClient" code:1 userInfo:@{NSLocalizedDescriptionKey: @"No actor was provided."}]);
     return;
   }
 
+  NSUInteger profileRevision = self.profileEditRevision;
   // Profiles include viewer-specific follow/block state.
   NSString *cacheKey = [self resourceCacheKeyWithName:@"profile" qualifier:actor.lowercaseString ?: actor];
   NSUInteger accountGeneration = [NFBAtprotoSession sharedSession].accountGeneration;
@@ -1232,7 +1218,7 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
     }
     NSDictionary *profile = value;
     NSString *did = [profile[@"did"] isKindOfClass:NSString.class] ? profile[@"did"] : @"";
-    [self fetchProfileRecordForDID:did completion:^(NSDictionary *record) {
+    [self fetchProfileRecordForDID:did completion:^(NSDictionary *record, NSString *endpoint) {
       if (accountGeneration != [NFBAtprotoSession sharedSession].accountGeneration) {
         NSArray *requests = nil;
         @synchronized (self) {
@@ -1242,25 +1228,18 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
         [self completePendingDictionaryRequests:requests value:nil error:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]];
         return;
       }
-      NSMutableDictionary *merged = [profile mutableCopy];
-      if (record.count > 0) {
-        merged[@"profileRecord"] = record;
-        NSDictionary *recordPinnedPost = [record[@"pinnedPost"] isKindOfClass:NSDictionary.class] ? record[@"pinnedPost"] : nil;
-        if (recordPinnedPost.count > 0 && ![merged[@"pinnedPost"] isKindOfClass:NSDictionary.class]) merged[@"pinnedPost"] = recordPinnedPost;
-        NSArray<NSString *> *stringKeys = @[@"pronouns", @"website"];
-        for (NSString *key in stringKeys) {
-          NSString *recordValue = [record[key] isKindOfClass:NSString.class] ? record[key] : @"";
-          if (recordValue.length > 0) merged[key] = recordValue;
-        }
-        id birthday = record[@"birthday"];
-        if ([birthday isKindOfClass:NSString.class] || [birthday isKindOfClass:NSDictionary.class]) merged[@"birthday"] = birthday;
-      }
+      NSMutableDictionary *merged = record.count ? [NFBProfileViewApplyingRecord(profile,record,endpoint) mutableCopy] : [profile mutableCopy];
+      NSDictionary *pinned = [record[@"pinnedPost"] isKindOfClass:NSDictionary.class] ? record[@"pinnedPost"] : nil;
+      if (pinned) merged[@"pinnedPost"] = pinned;
+      if (record[@"birthday"] && !NFBProfileString(record[@"com.nottwitter.birthDate"]).length) merged[@"birthday"] = record[@"birthday"];
       NSDictionary *result = [merged copy];
-      if ([[NFBAtprotoSession sharedSession].did isEqualToString:result[@"did"]]) {
-        [[NFBAtprotoSession sharedSession] updateProfileFromDictionary:result];
-      }
       NSArray *requests = nil;
       @synchronized (self) {
+        // Arbitrate and publish together: Save may finish during either read.
+        if (profileRevision != self.profileEditRevision && self.recentProfileEdits[did]) result = self.recentProfileEdits[did];
+        if ([[NFBAtprotoSession sharedSession].did isEqualToString:result[@"did"]]) {
+          [[NFBAtprotoSession sharedSession] updateProfileFromDictionary:result];
+        }
         self.profileCache[cacheKey] = result;
         self.profileCacheDates[cacheKey] = [NSDate date];
         requests = [self.profilePendingCompletions[requestKey] copy];
@@ -1774,6 +1753,20 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   }];
 }
 
+- (void)prepareFacetsForText:(NSString *)text completion:(void (^)(NSArray *, NSError *))completion {
+  NFBRichTextResolve(text, ^(NSString *handle, void (^resolved)(NSString *, NSError *)) {
+    [[NFBAtprotoSession sharedSession] xrpcGET:@"com.atproto.identity.resolveHandle"
+                                     service:NFBAtprotoPublicAppViewURL
+                                      params:@{@"handle":handle}
+                               authenticated:NO
+                                  completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
+      (void)response;
+      NSString *did = [value isKindOfClass:NSDictionary.class] ? NFBClientStringValue(value[@"did"]) : @"";
+      resolved(did, error);
+    }];
+  }, completion);
+}
+
 - (void)sendChatMessageToConversationID:(NSString *)conversationID text:(NSString *)text completion:(NFBAtprotoDictionaryCompletion)completion {
   NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   if (conversationID.length == 0 || trimmed.length == 0) {
@@ -1781,22 +1774,28 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
     return;
   }
 
-  NSMutableDictionary *message = [@{@"text": trimmed} mutableCopy];
-  NSArray<NSDictionary *> *facets = NFBClientLinkFacetsForText(trimmed);
-  if (facets.count > 0) message[@"facets"] = facets;
-  NSDictionary *body = @{
-    @"convoId": conversationID,
-    @"message": message
-  };
-  [[NFBAtprotoSession sharedSession] xrpcPOSTViaChatProxy:@"chat.bsky.convo.sendMessage"
-                                                     body:body
-                                               completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
-    (void)response;
-    if (error || ![value isKindOfClass:NSDictionary.class]) {
-      if (completion) completion(nil, error ?: [NSError errorWithDomain:@"NFBAtprotoClient" code:63 userInfo:@{NSLocalizedDescriptionKey: @"Could not send that message."}]);
+  NSUInteger generation = [NFBAtprotoSession sharedSession].accountGeneration;
+  [self prepareFacetsForText:trimmed completion:^(NSArray *facets, NSError *facetError) {
+    if (facetError || generation != [NFBAtprotoSession sharedSession].accountGeneration) {
+      if (completion) completion(nil, facetError ?: [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
       return;
     }
-    if (completion) completion((NSDictionary *)value, nil);
+    NSMutableDictionary *message = [@{@"text": trimmed} mutableCopy];
+    if (facets.count > 0) message[@"facets"] = facets;
+    NSDictionary *body = @{
+      @"convoId": conversationID,
+      @"message": message
+    };
+    [[NFBAtprotoSession sharedSession] xrpcPOSTViaChatProxy:@"chat.bsky.convo.sendMessage"
+                                                       body:body
+                                                 completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
+      (void)response;
+      if (error || ![value isKindOfClass:NSDictionary.class]) {
+        if (completion) completion(nil, error ?: [NSError errorWithDomain:@"NFBAtprotoClient" code:63 userInfo:@{NSLocalizedDescriptionKey: @"Could not send that message."}]);
+        return;
+      }
+      if (completion) completion((NSDictionary *)value, nil);
+    }];
   }];
 }
 
@@ -1972,64 +1971,71 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
     }
   }
 
-  [self uploadMediaItems:items completion:^(NSArray<NSDictionary *> *uploadedItems, NSError *uploadError) {
-    if (uploadError) {
-      if (completion) completion(nil, uploadError);
+  [self prepareFacetsForText:trimmed completion:^(NSArray *facets, NSError *facetError) {
+    if (facetError) {
+      if (completion) completion(nil, facetError);
       return;
     }
-
-    NSMutableDictionary *record = [@{
-      @"$type": @"app.bsky.feed.post",
-      @"text": trimmed ?: @"",
-      @"createdAt": [self.class isoDateNow]
-    } mutableCopy];
-    NSMutableOrderedSet *warnings = [NSMutableOrderedSet orderedSet];
-    for (NSDictionary *item in uploadedItems) {
-      for (NSString *warning in item[@"contentWarnings"] ?: @[]) {
-        if ([@[@"nudity", @"gore", @"!warn"] containsObject:warning]) [warnings addObject:warning];
-      }
-    }
-    if (warnings.count) {
-      NSMutableArray *labels = [NSMutableArray array];
-      for (NSString *warning in warnings) [labels addObject:@{@"val":warning}];
-      record[@"labels"] = @{@"$type":@"com.atproto.label.defs#selfLabels", @"values":labels};
-    }
-    NSDictionary *replyRef = [self.class replyRefForParentPost:parentPost];
-    if (replyRef) record[@"reply"] = replyRef;
-    NSDictionary *quoteRef = [self.class postRefForPost:quotePost];
-    NSDictionary *embed = [self.class embedForUploadedMediaItems:uploadedItems quoteRef:quoteRef];
-    if (embed) record[@"embed"] = embed;
-
-    NSDictionary *body = @{
-      @"repo": self.postingAccountDID ?: @"",
-      @"collection": @"app.bsky.feed.post",
-      @"record": record
-    };
-
-    [[NFBAtprotoSession sharedSession] xrpcPOST:@"com.atproto.repo.createRecord"
-                                        forAccountDID:self.postingAccountDID
-                                           body:body
-                                     completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
-      (void)response;
-      NSDictionary *createdPost = [value isKindOfClass:[NSDictionary class]] ? value : nil;
-      if (error || !createdPost) {
-        if (completion) completion(createdPost, error);
+    [self uploadMediaItems:items completion:^(NSArray<NSDictionary *> *uploadedItems, NSError *uploadError) {
+      if (uploadError) {
+        if (completion) completion(nil, uploadError);
         return;
       }
 
-      // Retain reply.root when the next composed Tweet replies to this result.
-      NSMutableDictionary *createdWithRecord = [createdPost mutableCopy];
-      createdWithRecord[@"record"] = record;
-      createdPost = createdWithRecord;
-      [[NFBAtprotoClient sharedClient] invalidateThreadPayloadCache];
-      NSString *gate = replyGate.length > 0 ? replyGate : NFBComposeReplyGateEveryone;
-      if (parentPost || [gate isEqualToString:NFBComposeReplyGateEveryone]) {
-        if (completion) completion(createdPost, nil);
-        return;
+      NSMutableDictionary *record = [@{
+        @"$type": @"app.bsky.feed.post",
+        @"text": trimmed ?: @"",
+        @"createdAt": [self.class isoDateNow]
+      } mutableCopy];
+      if (facets.count > 0) record[@"facets"] = facets;
+      NSMutableOrderedSet *warnings = [NSMutableOrderedSet orderedSet];
+      for (NSDictionary *item in uploadedItems) {
+        for (NSString *warning in item[@"contentWarnings"] ?: @[]) {
+          if ([@[@"nudity", @"gore", @"!warn"] containsObject:warning]) [warnings addObject:warning];
+        }
       }
-      [self createThreadgateForPostURI:NFBClientStringValue(createdPost[@"uri"]) replyGate:gate completion:^(NSDictionary *gateValue, NSError *gateError) {
-        (void)gateValue;
-        if (completion) completion(createdPost, gateError);
+      if (warnings.count) {
+        NSMutableArray *labels = [NSMutableArray array];
+        for (NSString *warning in warnings) [labels addObject:@{@"val":warning}];
+        record[@"labels"] = @{@"$type":@"com.atproto.label.defs#selfLabels", @"values":labels};
+      }
+      NSDictionary *replyRef = [self.class replyRefForParentPost:parentPost];
+      if (replyRef) record[@"reply"] = replyRef;
+      NSDictionary *quoteRef = [self.class postRefForPost:quotePost];
+      NSDictionary *embed = [self.class embedForUploadedMediaItems:uploadedItems quoteRef:quoteRef];
+      if (embed) record[@"embed"] = embed;
+
+      NSDictionary *body = @{
+        @"repo": self.postingAccountDID ?: @"",
+        @"collection": @"app.bsky.feed.post",
+        @"record": record
+      };
+
+      [[NFBAtprotoSession sharedSession] xrpcPOST:@"com.atproto.repo.createRecord"
+                                          forAccountDID:self.postingAccountDID
+                                             body:body
+                                       completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
+        (void)response;
+        NSDictionary *createdPost = [value isKindOfClass:[NSDictionary class]] ? value : nil;
+        if (error || !createdPost) {
+          if (completion) completion(createdPost, error);
+          return;
+        }
+
+        // Retain reply.root when the next composed Tweet replies to this result.
+        NSMutableDictionary *createdWithRecord = [createdPost mutableCopy];
+        createdWithRecord[@"record"] = record;
+        createdPost = createdWithRecord;
+        [[NFBAtprotoClient sharedClient] invalidateThreadPayloadCache];
+        NSString *gate = replyGate.length > 0 ? replyGate : NFBComposeReplyGateEveryone;
+        if (parentPost || [gate isEqualToString:NFBComposeReplyGateEveryone]) {
+          if (completion) completion(createdPost, nil);
+          return;
+        }
+        [self createThreadgateForPostURI:NFBClientStringValue(createdPost[@"uri"]) replyGate:gate completion:^(NSDictionary *gateValue, NSError *gateError) {
+          (void)gateValue;
+          if (completion) completion(createdPost, gateError);
+        }];
       }];
     }];
   }];
@@ -2748,15 +2754,15 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
   }];
 }
 
-- (void)fetchProfileRecordForDID:(NSString *)did completion:(void (^)(NSDictionary *record))completion {
+- (void)fetchProfileRecordForDID:(NSString *)did completion:(void (^)(NSDictionary *record, NSString *endpoint))completion {
   if (did.length == 0) {
-    if (completion) completion(@{});
+    if (completion) completion(@{}, nil);
     return;
   }
 
   [[NFBAtprotoSession sharedSession] resolvePDSForDID:did completion:^(NSString *serviceEndpoint) {
     if (serviceEndpoint.length == 0) {
-      if (completion) completion(@{});
+      if (completion) completion(@{}, nil);
       return;
     }
 
@@ -2771,11 +2777,11 @@ static NSArray<NSDictionary *> *NFBClientLinkFacetsForText(NSString *text) {
                                     completion:^(id value, NSHTTPURLResponse *response, NSError *error) {
       (void)response;
       if (error || ![value isKindOfClass:NSDictionary.class]) {
-        if (completion) completion(@{});
+        if (completion) completion(@{}, nil);
         return;
       }
       NSDictionary *record = [value[@"value"] isKindOfClass:NSDictionary.class] ? value[@"value"] : @{};
-      if (completion) completion(record);
+      if (completion) completion(record, serviceEndpoint);
     }];
   }];
 }

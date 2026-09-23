@@ -12,9 +12,10 @@ chat_helpers='\n'.join(function(p) for p in [
  'static NSString *NFBStringValue(', 'static NSDictionary *NFBChatRawMessage(',
  'static NSString *NFBChatTrimTrailingURLPunctuation(', 'static NSString *NFBChatPostURIFromURLString(',
  'static NSArray<NSString *> *NFBChatURLTokensInText(', 'static NSString *NFBChatSharedPostURIFromMessage(',
- 'static NSDictionary *NFBChatSharedPostForMessage(NSDictionary *message) {', 'static NSString *NFBChatMessageDisplayText(NSDictionary *message) {',
+ 'static NSDictionary *NFBChatSharedPostForMessage(NSDictionary *message) {', 'static NSDictionary *NFBChatMessageDisplayRecord(NSDictionary *message) {', 'static NSString *NFBChatMessageDisplayText(NSDictionary *message) {',
 ])
 chat_helpers=chat_helpers.replace('NFBPostLink(candidate)[@"uri"]','[NFBPostLink(candidate) objectForKey:@"uri"]')
+chat_helpers=chat_helpers.replace('NFBChatMessageDisplayRecord(message)[@"text"]','[NFBChatMessageDisplayRecord(message) objectForKey:@"text"]')
 chat_helpers=re.sub(r'(\w+)\[(@"[^"\n]+"|NFBChatSharedPostKey|NFBChatSharedPostURIKey)\]',r'[\1 objectForKey:\2]',chat_helpers)
 chat_helpers='static NSString *NFBChatSharedPostKey=@"__sharedPost", *NFBChatSharedPostURIKey=@"__sharedPostURI";\nstatic NSString *NFBChatMessageText(NSDictionary *message);\n'+chat_helpers+'\nstatic NSString *NFBChatMessageText(NSDictionary *message){return NFBStringValue([NFBChatRawMessage(message) objectForKey:@"text"]);}'
 source=r'''

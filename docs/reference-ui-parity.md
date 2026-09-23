@@ -891,3 +891,260 @@ Documents copy: `Not Twitter 1.2 (Build 156).ipa`, SHA-256
 
 USB installation succeeded; installation-proxy lookup confirmed Not Twitter
 1.2/build 156 on the paired iPhone.
+
+## Translation, Home scrolling, tab bar and profile audit (1.3 build 160)
+
+Reference: Twitter_9.67_decrypted.ipa, its English strings and arm64 T1Twitter
+binary; bottom-bar target is the user's second, opaque screenshot (1320 × 517).
+
+Translation now offers `Translate Tweet` under eligible post text and `Translate
+bio` under profile descriptions. T1TranslateButton uses the reference link color
+and small-font role; the reference strings supply those titles and the
+`Translated from … by …` attribution format. Results remain below the original,
+with Apple attribution and source language. Apple's public TranslationSession
+runs on-device on iOS 18+, using a SwiftUI translationTask and the system model
+preparation/download consent. Language detection ignores URLs/handles/tags,
+respects the user's preferred languages, checks pair support and falls back to
+one declared post language when detection is uncertain. Cancellation/reuse is
+guarded by generation and successful results are cached in memory. Errors offer
+an inline retry. Original facet offsets are never applied to translated text.
+Fixed-height DM preview cards keep their existing layout; opening their post
+provides translation. Older iOS versions do not load the translation framework.
+
+Home collapses its navigation bar with the vertical drag, reverses on a downward
+drag, snaps after release and restores at the top, during refresh and on leaving
+Home. The feed tabs rise with it; the bottom tab bar remains present. The
+reference TFNNavigationController tracks navigationBarExpansionRatio and separate
+expanding/collapsing states (startCollapsing 0x8d862c, startExpanding 0x8d8714,
+updateSimulatedHeight 0x8d889c). Our pan-based implementation adapts that behavior
+without relying on its private navigation classes. Snap thresholds are an app
+choice, not a recovered constant.
+
+The bottom bar is opaque, uses #1a242c in Dim mode, and has a 52-point control
+region plus the actual home-indicator inset. Icon insets move down 4 points from
+the previous build. This targets the supplied image: approximately 86 points of
+bar and an icon center 30 points below its upper border at 3x. The binary's
+TFNCustomTabBarDefaultHeight is 49, so 52 is explicitly a screenshot calibration,
+not a claim about that binary constant. Compact landscape retains 32 points plus
+the device inset. Final UIKit geometry has not been photographed.
+
+Profile audit: profilesFullNameFont (0x25d38c4) uses content-font +7/heavy;
+profilesUsernameFont and bio use normalFont; metadata/following labels use
+smallFont, counts smallBoldFont, and mutual-following text normalFont. Applied
+those relationships to the app's 15-point body baseline: name 22, metadata and
+counts 13, mutual-following text 15. Bio links are now interactive, translation
+resizes the table header, and details clear both the avatar and action controls.
+The reference avatar size depends on a runtime font metric
+(min(pixel-ceil(lineHeight × 3.66), 120), 0x831c5c), with a 5% image inset. We did
+not invent an absolute replacement for the current 96-point avatar based on
+that incomplete runtime measurement. Existing banner/collapse geometry is
+retained. A full profile screenshot comparison and Dynamic Type/device checks
+are still needed before claiming exact visual parity.
+
+Build: Objective-C remains on the iOS 16.5 SDK. A separately loaded, signed
+NFBTranslation.framework uses Swift 6.1.2 with iOS 18.6 interfaces and complete
+iOS 18.0 link stubs (the downloaded 18.6 stubs omit Translation's Swift exports).
+Readonly static-object optimization is disabled to avoid newer Swift runtime
+symbols on iOS 18. Public framework symbols resolve at link time; no undefined
+symbol workaround or private translation service is used. Build setup is in
+README and tools/build-translation.sh.
+
+Validation: arm64 package succeeds; translation-policy, chrome-geometry,
+profile-presentation, back-swipe runtime and feed-tab-name runtime checks pass.
+IPA contents confirm the framework and build 160. USB install succeeds and
+installation-proxy lookup confirms Not Twitter 1.3/build 160. Remote launch
+fails with DebugserverClient.Error.unknown and screenshotr is unavailable;
+on-device translation/model consent, scrolling animation and visual parity
+remain unverified.
+
+## Complete bottom-bar styling pass and feed-swipe fix (1.3 build 161)
+
+Compared all eight default-tab SVGs and rendered PNG alpha masks with Twitter
+9.67: Home, Explore, Notifications and Messages, selected and unselected, match
+exactly. T1TabView::_t1_imageHeight (0x51a4e0) returns 24pt, matching the existing
+image sizing. Retained the user's opaque screenshot's height and vertical icon
+calibration from build 160, gray inactive tint, one-physical-pixel separator,
+hidden labels, and full safe-area background.
+
+Corrected the underlying UITabBarAppearance to opaque in both standard and
+scroll-edge states; removed the redundant visual-effect background, disabled
+translucency and used fill positioning for equal-width items. Selected icons
+now use the reference text tint regardless of the legacy hidden tab_bar_theming
+preference, while notification colors still follow the chosen accent. The tab
+spring respects Reduce Motion.
+
+Badge measurements now follow actual binary methods: tabBadgeFont (0x25d290c)
+returns fixedSmallFont, whose 0x25d2188 implementation selects regular 12pt.
+TFNBadgeView initializes a 16pt minimum fill and 2pt outside border; sizeThatFits
+(0x956980) adds 8pt horizontal padding and accommodates the font line height.
+T1TabView::_t1_layoutBadgeViewMaximized (0x51b6f4) centers a count badge 12pt right
+of the icon, bottom aligned with its center. The unread indicator is 6pt, centered
+at icon center +(8,-12) (0x51c1e0). Notifications and Messages now use the same
+geometry, accent fill, white regular count and background-colored ring. The ring
+uses the opaque bar's color to blend with its actual surface. Badges follow the
+rendered icon instead of stale control-top coordinates.
+
+Swipe diagnosis: tests/home-header-paging-runtime.py initially failed with
+`horizontal feed reload must not pop the hidden header open`. During a sideways
+feed transition, reload/refresh callbacks hit the unconditional top-of-feed
+expansion path, moving the shared header and both tables mid-transition. The
+header now freezes for the entire drag and settling phase, including reloads;
+it reconciles with the new feed only after completion. A pending vertical snap
+is captured at its presentation position before horizontal paging begins.
+Cancellation is also guarded against a second overlapping swipe.
+
+A second geometry error copied the already-transformed table frame to its
+snapshot and applied the drag transform again. Snapshot bounds/center are now
+copied in untransformed coordinates. The production-code runtime harness checks
+that a -120pt drag produces exactly -120pt snapshot displacement, plus frozen
+header position through drag/settle reload and refresh callbacks, and resumed
+vertical expansion afterward. The earlier regression now passes. Back-swipe and
+feed-tab-name runtime tests pass; arm64 compilation has no warnings. These tests
+exercise production callbacks and geometry with UIKit doubles, not live device
+animation or a screenshot comparison.
+
+Delivery: USB installation succeeded and installation-proxy lookup confirms
+Not Twitter 1.3/build 161. Screenshot capture still fails because screenshotr is
+not available on the paired device. Full visual parity and the on-device swipe
+animation remain unverified.
+
+## Home header layout ownership and classic tint (1.3 build 162)
+
+Build 161's callback guards did not cover UIKit layout: the navigation
+controller's bar was still translated/faded while the feed strip was positioned
+with a negative offset against its safe-area guide. The horizontal strip also
+retained automatic inset adjustment. That left two layout owners affecting the
+header/label viewport across relayout and interrupted transitions. The user
+reported a cropped reappearing header followed by blank feed labels.
+
+Home now owns a clipped header view containing the existing account avatar,
+Twitter mark and Manage Feeds control. Its height alone collapses from 44pt
+(32pt compact) to zero; fixed-height content is bottom-aligned within that clip.
+Feed labels follow the clip's bottom with no negative safe-area offset. The
+horizontal scroller explicitly disables automatic content/indicator insets.
+UIKit's navigation bar stays hidden on Home and is restored through the normal
+navigation API on departure; its transform and alpha are never changed by
+scrolling. Interrupted animations sample our header's visible height rather
+than UIKit's navigation-bar transform. Account imagery/actions, feed selection,
+compact-height changes and theme rebuilding retain their existing paths.
+
+The new production-layout harness failed on the old mutation of the native bar
+and now passes repeated full/partial collapse and reveal, unchanged native bar
+geometry, restored content opacity and disabled feed-strip inset adjustment.
+The paging/snapshot, feed-name, back-swipe and account-avatar runtime tests pass.
+These are layout/state checks with doubles, not a reproduction of UIKit's
+rendering on the phone; the cropped/blank-label symptom still requires visual
+confirmation there.
+
+Classic tint: the original NeoFreeBird settings expose CLASSIC_TAB_BAR_SETTINGS
+through tab_bar_theming, distinct from Twitter 9.67's neutral default tab tint.
+Build 161 incorrectly made neutral tint unconditional. Selected bottom tabs now
+use the chosen accent (blue, yellow, pink, purple, orange or green); inactive
+icons remain the secondary gray. Background, reference vectors, spacing and
+badge corrections from build 161 remain in place.
+
+Delivery: build/package succeeded; USB installation and installation-proxy lookup
+confirm Not Twitter 1.3/build 162. screenshotr remains unavailable, so no live
+visual confirmation is claimed.
+
+## Home bird ownership correction (1.3 build 163)
+
+The custom header was adopting the same logo view assigned to
+UINavigationItem.titleView, then clearing titleView afterward. That left UIKit
+free to detach content that Home had just adopted. The account control had the
+same temporary navigation-item ownership. Home now creates its bird and account
+views directly for its own header, and clears native items before adoption.
+Other root screens keep the normal UIBarButtonItem wrapper around the shared
+avatar builder.
+
+The production Home-setup runtime test first failed because navigation-item
+cleanup removed the adopted bird. It now passes initial setup and repeated theme
+rebuilds, checking that the bird and both controls remain in the custom header.
+Header layout, paging/snapshot and account-avatar regressions also pass. This
+ownership harness models navigation-item cleanup; it is not a device screenshot.
+
+Build/package and USB install succeeded; installation-proxy lookup confirms
+Not Twitter 1.3/build 163. On-device visual confirmation remains unavailable.
+
+## Edit profile and ATProto writes (1.3 build 164)
+
+The placeholder Edit profile alert now opens a full-screen native editor. The
+supplied Twitter 9.67 IPA is the layout authority. Inspected evidence:
+
+- T1EditProfileViewController initWithAccount:selectedField: (0x353a28),
+  doneBarButtonItem (0x353fa8), and viewDidLoad (0x3556…) provide Cancel, Edit
+  profile, Save, image overlays and the camera controls.
+- _setupBannerAppearance (0x356660) divides width by 3 in portrait and by 6 in
+  landscape. T1ProfileFormAppearance sectionInsetForSectionAtIndex:withLayoutMetrics:
+  (0x55647c) adds 60 points between the banner's bottom and the form's first row.
+- TFNAvatarHeaderView preferredSizeForLayoutMetrics:overlay: (0x831c5c) uses
+  ceil-to-pixel(lineHeight * 3.66), capped at 120 points. Its image inset is 5%.
+  T1EditProfileViewController scrollViewDidScroll: (0x356ebc) clamps the avatar
+  scale to [0.666, 1], with a -0.8 banner-height denominator. Its center uses
+  bannerHeight + (0.675 - scale/2) * avatarHeight before the scroll offset.
+- Camera rendering at 0x355ac8 fits a 32-point image, alpha 0.85, with a 0.3
+  black banner overlay. Existing reference camera artwork is reused.
+- T1EditProfileForm sections (0x555…) orders Name, Bio, Location, Website,
+  Birth date. TAEStandardFontGroup formFieldTitleFont (0x25d4070) delegates to
+  normalBoldFont; formTextFieldFont delegates to normalFont. Full-width dividers
+  follow sectionedAppearanceWithInsetSeparators:NO.
+
+Standard fields write app.bsky.actor.profile/self on the signed-in account's
+PDS. The editor loads the full record plus CID, changes only explicit edits,
+uploads JPEG avatar/banner blobs (maximum 1,000,000 bytes each), and calls
+com.atproto.repo.putRecord with swapRecord. RecordNotFound alone permits a new
+record with swapRecord:null. Unknown fields, labels, pronouns, createdAt and
+pinnedPost survive. Authentication and refresh use the existing account-scoped
+session transport; changing accounts or an A-B-A switch invalidates the editor.
+Duplicate saves are rejected. Upload failures, invalid responses and revision
+conflicts preserve the draft; conflicts offer an explicit discard-and-reload.
+
+Name and bio use ATProto's current 64/256 grapheme and 640/2560 UTF-8 byte limits.
+Website is a standard field in the current lexicon. Location and birth date are
+optional Not Twitter extensions (com.nottwitter.location and
+com.nottwitter.birthDate) in the public profile record. Both screens explain
+public visibility; no Twitter-style private birthday setting is implied.
+Twitter-only professional-account and tipping actions are not fabricated.
+
+Photo picking supports the library and camera; the crop window exports a square
+avatar or 3:1 banner and re-encodes it as JPEG. Saved record fields and blob URLs
+refresh the profile immediately instead of waiting for AppView indexing. Older
+profile requests and image hydration cannot replace the saved result. Local
+UIImage previews are stripped before persisting the session.
+
+Protocol sources checked for this implementation:
+- https://raw.githubusercontent.com/bluesky-social/atproto/main/lexicons/app/bsky/actor/profile.json
+- https://raw.githubusercontent.com/bluesky-social/atproto/main/lexicons/com/atproto/repo/putRecord.json
+
+Verification: profile-edit-runtime.py executes production record and transaction
+code against a controlled PDS transport, checking preservation, validation,
+upload-before-write, exact repo/rkey/CID/account arguments, creation, duplicates,
+conflicts, malformed responses, network errors and account changes. The geometry
+C test covers reference banner proportions, overlap, and scroll bounds. Existing
+account-switch, avatar, Home-header ownership and paging checks also pass.
+The arm64 app compiles and packages. These are executable backend/layout checks,
+not a live account edit or a pixel comparison on iOS; screenshot/debug services
+on the connected phone remain unavailable. On-device editing and screenshot
+parity still require visual confirmation.
+
+Delivery: xtool installed the fresh IPA over USB successfully; installation-proxy
+lookup confirmed Not Twitter 1.3 build 164 on the connected iPhone. A fresh
+screenshot attempt still returned "Could not start screenshotr service: Invalid
+service", so this run does not claim an on-device screenshot comparison.
+
+## Optional pronouns in Edit profile (1.3 build 165)
+
+The web editor's src/components/user/user-edit-profile.tsx places an optional
+Pronouns field after Bio and limits it to 20 characters. Its backend writes the
+standard profile record's pronouns string, trims surrounding whitespace, and
+removes the key when cleared. The native editor now follows that field order and
+save behavior, with ATProto's 20-grapheme/200-byte limits. Existing profile-header
+pronouns presentation and the confirmed-save refresh path display the result.
+This is an intentional addition to the reference IPA form to match Not Twitter's
+web functionality. Runtime tests verify the length limits, preservation of other
+fields, pronouns writes and removal, and immediate profile-view projection.
+
+Build 165 compiled and packaged successfully. Phone delivery was attempted, but
+USB enumeration showed no iPhone, usbmuxd was inactive, and the installer timed
+out waiting for a device after 45 seconds. Build 165 is not confirmed installed;
+the last confirmed on-device version remains build 164 from the preceding run.

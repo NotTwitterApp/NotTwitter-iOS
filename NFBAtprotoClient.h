@@ -3,6 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 extern NSString * const NFBAtprotoFeedListCacheDidInvalidateNotification;
+extern NSString * const NFBAtprotoProfileUpdatedNotification;
 
 typedef void (^NFBAtprotoArrayCompletion)(NSArray<NSDictionary *> *_Nullable items, NSString *_Nullable cursor, NSError *_Nullable error);
 typedef void (^NFBAtprotoDictionaryCompletion)(NSDictionary *_Nullable value, NSError *_Nullable error);
@@ -47,6 +48,7 @@ typedef void (^NFBAtprotoDictionaryCompletion)(NSDictionary *_Nullable value, NS
 - (void)setActivitySubscriptionForSubject:(NSString *)subject post:(BOOL)post reply:(BOOL)reply completion:(nullable NFBAtprotoDictionaryCompletion)completion;
 - (void)registerPushToken:(NSString *)token appID:(NSString *)appID completion:(nullable NFBAtprotoDictionaryCompletion)completion;
 - (void)unregisterPushToken:(NSString *)token appID:(NSString *)appID completion:(nullable NFBAtprotoDictionaryCompletion)completion;
+- (void)acceptUpdatedProfile:(NSDictionary *)profile;
 - (void)fetchProfileForActor:(NSString *)actor completion:(NFBAtprotoDictionaryCompletion)completion;
 - (void)fetchChatConversationsWithCursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;
 - (void)fetchChatConversationRequestsWithCursor:(nullable NSString *)cursor completion:(NFBAtprotoArrayCompletion)completion;

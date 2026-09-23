@@ -20,7 +20,7 @@
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/net.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/darwin_c_xlocale.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/darwin_cdefs.modulemap \
-  /home/eric/Developer/NotTwitter-iOS/NFBQuotedPostView.h \
+  /home/eric/Developer/NotTwitter-iOS/NFBTranslationView.h \
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/rocketbootstrap/module.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/libundirect/module.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/libroot/module.modulemap \
@@ -82,6 +82,7 @@
   /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/AppList/module.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/compact_unwind_encoding.modulemap \
   /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/dyld.modulemap \
+  /home/eric/Developer/NotTwitter-iOS/NFBQuotedPostView.h \
   /home/eric/Developer/NotTwitter-iOS/NFBAtprotoClient.h \
   /home/eric/Developer/NotTwitter-iOS/NFBExternalCardView.h \
   /home/eric/Developer/NotTwitter-iOS/NFBMediaPreviewView.h \
@@ -128,7 +129,7 @@
 
 /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/darwin_cdefs.modulemap:
 
-/home/eric/Developer/NotTwitter-iOS/NFBQuotedPostView.h:
+/home/eric/Developer/NotTwitter-iOS/NFBTranslationView.h:
 
 /home/eric/Developer/NeoFreeBird/_build/theos/vendor/include/rocketbootstrap/module.modulemap:
 
@@ -251,6 +252,8 @@
 /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/compact_unwind_encoding.modulemap:
 
 /home/eric/Developer/NeoFreeBird/_build/theos/sdks/iPhoneOS16.5.sdk/usr/include/mach-o/dyld.modulemap:
+
+/home/eric/Developer/NotTwitter-iOS/NFBQuotedPostView.h:
 
 /home/eric/Developer/NotTwitter-iOS/NFBAtprotoClient.h:
 

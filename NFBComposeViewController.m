@@ -1,3 +1,4 @@
+#import "NFBRichText.h"
 #import "NFBInteractiveSheet.h"
 #import "NFBComposeViewController.h"
 
@@ -6110,7 +6111,7 @@ static NSString * const NFBComposeSuggestionCellIdentifier = @"NFBComposeSuggest
   NSString *token = [text substringWithRange:range];
   if (token.length == 0) return nil;
   unichar first = [token characterAtIndex:0];
-  if (first != '@' && first != '#') return nil;
+  if (first != '@' && first != '#' && first != 0xFF03) return nil;
   if ([token rangeOfString:@"/"].location != NSNotFound) return nil;
   NSString *query = token.length > 1 ? [token substringFromIndex:1] : @"";
   NSString *kind = first == '@' ? @"actor" : @"hashtag";
@@ -6163,15 +6164,13 @@ static NSString * const NFBComposeSuggestionCellIdentifier = @"NFBComposeSuggest
 
 - (NSString *)normalizedHashtagFromText:(NSString *)text {
   NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
-  if ([trimmed hasPrefix:@"#"]) trimmed = [trimmed substringFromIndex:1];
-  NSMutableString *tag = [NSMutableString string];
-  NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"];
-  for (NSUInteger index = 0; index < trimmed.length; index++) {
-    unichar character = [trimmed characterAtIndex:index];
-    if ([allowed characterIsMember:character]) [tag appendFormat:@"%C", character];
+  if (![trimmed hasPrefix:@"#"] && ![trimmed hasPrefix:@"＃"]) trimmed = [@"#" stringByAppendingString:trimmed];
+  for (NSDictionary *span in NFBRichTextSpans(trimmed, nil)) {
+    NSString *tag = span[@"feature"][@"tag"];
+    NSRange range = [span[@"range"] rangeValue];
+    if (tag.length && range.location == 0 && NSMaxRange(range) == trimmed.length) return [@"#" stringByAppendingString:tag];
   }
-  if (tag.length == 0) return @"";
-  return [@"#" stringByAppendingString:tag];
+  return @"";
 }
 
 - (NSArray<NSDictionary *> *)hashtagSuggestionsFromTags:(NSArray<NSString *> *)tags query:(NSString *)query {
@@ -6193,15 +6192,12 @@ static NSString * const NFBComposeSuggestionCellIdentifier = @"NFBComposeSuggest
 
 - (NSArray<NSString *> *)hashtagsFromSearchItems:(NSArray<NSDictionary *> *)items {
   NSMutableArray<NSString *> *tags = [NSMutableArray array];
-  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"#[\\p{L}\\p{M}\\p{N}_]+" options:0 error:nil];
   for (NSDictionary *item in items ?: @[]) {
     NSDictionary *post = [item[@"post"] isKindOfClass:NSDictionary.class] ? item[@"post"] : @{};
     NSString *text = [NFBAtprotoClient textForPost:post];
-    NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:text ?: @"" options:0 range:NSMakeRange(0, text.length)];
-    for (NSTextCheckingResult *match in matches) {
-      if (match.range.location != NSNotFound && NSMaxRange(match.range) <= text.length) {
-        [tags addObject:[text substringWithRange:match.range]];
-      }
+    for (NSDictionary *span in NFBRichTextSpans(text, post[@"record"][@"facets"])) {
+      NSString *tag = span[@"feature"][@"tag"];
+      if (tag.length) [tags addObject:[@"#" stringByAppendingString:tag]];
     }
   }
   return tags;

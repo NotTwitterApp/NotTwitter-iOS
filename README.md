@@ -31,6 +31,7 @@ a sideloading tool before it can run on an iPhone.
 - Git, Bash, GNU Make, and the standard command-line tools used by Theos, including ZIP utilities.
 - [Theos with its Linux iOS cross-compilation toolchain](https://theos.dev/docs/installation-linux).
 - An `iPhoneOS16.5.sdk` SDK directory accessible to Theos.
+- Swift 6.1.2, `ld64.lld`, and an iOS 18+ SDK with Swift interfaces for the on-device translation framework. Set `SWIFTC` and `TRANSLATION_SDKROOT`. The app itself still supports iOS 14; translation is offered on iOS 18+.
 - `ldid` available on your `PATH` for the build’s signing step.
 - Optional: [xtool](https://xtool.sh/) and its runtime dependencies for signing and installing directly over USB. You can instead sideload the resulting IPA with SideStore or AltStore Classic.
 
@@ -49,6 +50,12 @@ export THEOS="$HOME/theos"
 export SDKROOT="$THEOS/sdks/iPhoneOS16.5.sdk"
 export PATH="$THEOS/bin:$PATH"
 
+# Translation uses a separate modern SDK and Swift compiler.
+export SWIFTC="/path/to/swift-6.1.2/usr/bin/swiftc"
+export TRANSLATION_SDKROOT="/path/to/iPhoneOS18.6.sdk"
+# Optional: use complete 18.0 link stubs if your newer SDK strips Swift exports.
+export TRANSLATION_LINK_SDKROOT="/path/to/iPhoneOS18.0.sdk"
+
 # Confirm that the required SDK and signing tool are available.
 test -d "$SDKROOT"
 command -v ldid
@@ -60,6 +67,15 @@ If `ldid` is installed elsewhere, add its directory to `PATH`. Without explicit
 It also prepends `../_build/bin` to `PATH`; that directory is optional when your
 tools are already on `PATH`.
 
+The translation compiler uses Darwin Swift resources from
+`$TRANSLATION_SDKROOT/usr/lib/swift`; override with `TRANSLATION_SWIFT_RESOURCES`
+if your toolchain supplies a separate Darwin resource directory. This directory
+must contain SDK Swift shims and a `clang` directory containing the matching
+compiler's builtin headers. With an SDK-only resource directory, link its
+`clang` entry to `$(dirname "$SWIFTC")/../lib/swift/clang`. Do not add the shims
+as a separate `-I` search path: that duplicates imported module definitions.
+The first build compiles SDK interfaces and can take several minutes.
+
 ### Create the IPA
 
 ```bash
@@ -67,10 +83,10 @@ tools are already on `PATH`.
 ```
 
 The helper performs a clean release build and packages the app in `packages/`.
-For version 1.2, the output is:
+For version 1.4, the output is:
 
 ```text
-packages/com.nottwitter.atproto_1.2.ipa
+packages/com.nottwitter.atproto_1.4.ipa
 ```
 
 Import that IPA into your preferred sideloading tool. A successful build confirms
@@ -92,7 +108,7 @@ Replace `YOUR_CONNECTED_DEVICE_UDID` with the identifier reported by
 
 ```bash
 xtool install --usb --udid YOUR_CONNECTED_DEVICE_UDID \
-  packages/com.nottwitter.atproto_1.2.ipa
+  packages/com.nottwitter.atproto_1.4.ipa
 ```
 
 By default, the helper leaves the IPA bundle identifier as `com.nottwitter.atproto`
@@ -107,7 +123,7 @@ with `./build-linux.sh` does not require xtool.
 
 For a release, keep `CFBundleShortVersionString` in `Resources/Info.plist` and
 `Version` in `control` in sync. Increment `CFBundleVersion` in
-`Resources/Info.plist` for each new build. This release is **1.2, build 156**.
+`Resources/Info.plist` for each new build. This release is **1.4, build 166**.
 
 ## Bookmark search
 
@@ -119,6 +135,26 @@ searching. Use `from:alice` (short for `alice.bsky.social`),
 Put text such as `"from:alice"` in quotes to search for it literally.
 
 ## Native networking
+
+Posts and direct messages publish AT Protocol facets for links, hashtags, and
+full-handle mentions (for example, `@alice.bsky.social`). Handles resolve to DIDs
+before sending, with duplicate handles resolved once per send. Lookup failures
+leave the send unsuccessful so mentions and mention-only reply permissions are
+not silently lost. A pending DM is canceled if the active account changes.
+
+The composer, timeline, bios, and DM bubbles share text detection, including
+bare domains with an IANA-listed top-level domain. Incoming facets take priority
+over detection, preserving custom link labels and DID-based mentions. Shared-post
+previews remap remaining facet offsets when hiding a link. DM text stays unshortened
+so its link ranges and bubble measurements match. Profile bio detection is local;
+the profile record does not define a description facet field.
+
+Run `python3 tests/post-facets-runtime.py` and
+`python3 tests/rich-text-runtime.py` with the GNUstep test runtime installed
+(`NFB_OBJC_TEST_RUNTIME` can override its prefix). These exercise the production
+publisher, mention resolution with a controlled transport, and the shared display
+logic without publishing posts or messages. Previously published records are not
+modified. `NFBKnownTLDs.h` records the bundled IANA TLD snapshot and source URL.
 
 The native session layer uses Bluesky OAuth with DPoP and talks to:
 

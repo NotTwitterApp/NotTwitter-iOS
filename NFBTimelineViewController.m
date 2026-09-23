@@ -1,3 +1,6 @@
+#import "NFBEditProfileViewController.h"
+#import "NFBChromeGeometry.h"
+#import "NFBTranslationView.h"
 #import "NFBSearchPagingScrollView.h"
 #import "NFBSearchPagingPolicy.h"
 #import "NFBAdvancedSearchViewController.h"
@@ -640,6 +643,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 @end
 
 @interface NFBTimelineViewController () <UITableViewDataSource, UITableViewDelegate, UISearchResultsUpdating, UISearchBarDelegate, UIContextMenuInteractionDelegate, NFBActorCellDelegate, UIGestureRecognizerDelegate, NFBPostCellDelegate, NFBSearchTypeaheadViewControllerDelegate, NFBMediaViewerViewControllerDelegate>
+@property (nonatomic) NSUInteger profileUpdateGeneration;
 
 @property (nonatomic, assign) NFBTimelineKind kind;
 @property (nonatomic, copy, nullable) NSString *actor;
@@ -685,6 +689,14 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 @property (nonatomic, assign) BOOL hasLoadedOnce;
 @property (nonatomic, assign) NSUInteger timelineLoadGeneration;
 @property (nonatomic, strong) UIView *homeTabsView;
+@property (nonatomic, strong) NSLayoutConstraint *homeTabsTopConstraint;
+@property (nonatomic, strong) UIView *homeHeaderClipView;
+@property (nonatomic, strong) UIView *homeHeaderContentView;
+@property (nonatomic, strong) NSLayoutConstraint *homeHeaderHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *homeHeaderContentHeightConstraint;
+@property (nonatomic) CGFloat homeHeaderCollapse;
+@property (nonatomic) CGFloat homeHeaderLastPanY;
+@property (nonatomic) BOOL homeHeaderDragging;
 @property (nonatomic, strong) UIView *homeTabsBorder;
 @property (nonatomic, strong) UIView *homeTabUnderline;
 @property (nonatomic, strong) NSLayoutConstraint *homeTabUnderlineCenterXConstraint;
@@ -975,7 +987,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.view.backgroundColor = NFBColorBackground();
-  if (self.kind == NFBTimelineKindProfile) {
+  if (self.kind == NFBTimelineKindProfile || self.kind == NFBTimelineKindHome) {
     self.edgesForExtendedLayout = UIRectEdgeTop;
     self.extendedLayoutIncludesOpaqueBars = YES;
   }
@@ -985,6 +997,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [self configureFloatingComposeButtonIfNeeded];
 
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(themeChanged:) name:NFBThemeDidChangeNotification object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(profileUpdated:) name:NFBAtprotoProfileUpdatedNotification object:nil];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(feedListCacheInvalidated:) name:NFBAtprotoFeedListCacheDidInvalidateNotification object:nil];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(advancedNotificationFiltersChanged:) name:NFBNotificationAdvancedFiltersDidChangeNotification object:nil];
 
@@ -1008,6 +1021,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   self.navigationItem.standardAppearance = appearance;
   self.navigationItem.scrollEdgeAppearance = appearance;
   self.navigationItem.compactAppearance = appearance;
+  self.homeHeaderClipView.backgroundColor = NFBColorBackground();
+  self.homeHeaderContentView.backgroundColor = NFBColorBackground();
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1019,15 +1034,9 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
   [self configureHomeNavigationAppearance];
   if (self.kind == NFBTimelineKindHome) {
-    // Explicitly identify the vertical feed, rather than the horizontal tab scroller.
-    // Selector availability avoids the Linux toolchain's missing OS-version helper.
-    if ([self respondsToSelector:@selector(setContentScrollView:forEdge:)]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunguarded-availability-new"
-      [self setContentScrollView:self.tableView forEdge:NSDirectionalRectEdgeTop];
-#pragma clang diagnostic pop
-    }
-    self.navigationController.hidesBarsOnSwipe = YES;
+    self.navigationController.hidesBarsOnSwipe = NO;
+    [self.navigationController setNavigationBarHidden:YES animated:animated];
+    [self applyHomeHeaderCollapse:0];
   }
   [self configurePushedBackButtonIfNeeded];
   [self configurePushedProfileBackButtonIfNeeded];
@@ -1049,6 +1058,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [self.searchPages[self.searchTab] beginAppearanceTransition:NO animated:animated];
   }
   if (self.kind == NFBTimelineKindHome) {
+    self.homeHeaderDragging = NO;
+    [self applyHomeHeaderCollapse:0];
     self.navigationController.hidesBarsOnSwipe = NO;
     [self.navigationController setNavigationBarHidden:NO animated:animated];
   }
@@ -1077,7 +1088,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   if (self.searchPager) [self.searchPages[self.searchTab] endAppearanceTransition];
 }
 
-- (void)configureRootAccountAvatarButton {
+- (UIView *)makeRootAccountAvatarView {
   UIView *avatarContainer = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 44.0, 44.0)];
   self.avatarButton = [UIButton buttonWithType:UIButtonTypeCustom];
   self.avatarButton.frame = CGRectMake(0.0, 6.0, 32.0, 32.0);
@@ -1095,8 +1106,12 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
   [self.avatarButton addTarget:self action:@selector(accountMenuTapped) forControlEvents:UIControlEventTouchUpInside];
   [avatarContainer addSubview:self.avatarButton];
-  self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:avatarContainer];
   [self refreshAccountChrome];
+  return avatarContainer;
+}
+
+- (void)configureRootAccountAvatarButton {
+  self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:[self makeRootAccountAvatarView]];
 }
 
 - (void)configureDiscoverTopicsButton {
@@ -1123,6 +1138,10 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
+  if (self.kind == NFBTimelineKindHome && self.homeHeaderContentHeightConstraint.constant != [self homeNavigationHeight]) {
+    self.homeHeaderContentHeightConstraint.constant = [self homeNavigationHeight];
+    [self applyHomeHeaderCollapse:0];
+  }
   [self layoutSearchPager];
   if (self.feedMetadata && fabs(self.feedHeaderWidth - CGRectGetWidth(self.tableView.bounds)) > 0.5) [self updateFeedHeader];
   [self updateFeedNavigationForScrollOffset];
@@ -1175,9 +1194,9 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     logo.tintColor = NFBNeoFreeBirdColorTopBirdIcon() ? NFBColorAccent() : NFBColorText();
     logo.contentMode = UIViewContentModeScaleAspectFit;
     logo.frame = CGRectMake(0, 0, 32.0, 32.0);
-    self.navigationItem.titleView = logo;
-
-    [self configureRootAccountAvatarButton];
+    // These views belong exclusively to Home's header. Registering them with
+    // a navigation item lets UIKit remove them again when that item is cleared.
+    UIView *avatarContainer = [self makeRootAccountAvatarView];
 
     UIButton *feedsButton = [UIButton buttonWithType:UIButtonTypeCustom];
     feedsButton.frame = CGRectMake(0.0, 0.0, 44.0, 44.0);
@@ -1187,7 +1206,12 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [feedsButton setImage:sparkle forState:UIControlStateNormal];
     feedsButton.imageEdgeInsets = UIEdgeInsetsMake(10.0, 10.0, 10.0, 10.0);
     [feedsButton addTarget:self action:@selector(manageFeedsTapped) forControlEvents:UIControlEventTouchUpInside];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:feedsButton];
+    // Home owns its collapsible chrome. UIKit keeps its navigation bar hidden
+    // here and owns it normally on pushed screens; we never transform that bar.
+    self.navigationItem.leftBarButtonItem = nil;
+    self.navigationItem.rightBarButtonItem = nil;
+    self.navigationItem.titleView = nil;
+    [self configureHomeHeaderWithLeftView:avatarContainer titleView:logo rightView:feedsButton];
   } else if (self.kind == NFBTimelineKindProfile) {
     self.title = nil;
     [self updateProfileNavigationTitleViewWithTitle:@"Profile" subtitle:nil];
@@ -1914,10 +1938,27 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [self updateSearchPageIndicator];
 }
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+  if (scrollView == self.tableView && self.kind == NFBTimelineKindHome &&
+      !self.homeFeedPanTracking && !self.homeFeedSwitchAnimating) {
+    self.homeHeaderDragging = YES;
+    self.homeHeaderLastPanY = [scrollView.panGestureRecognizer translationInView:self.view].y;
+  }
   if (scrollView != self.searchPager) return;
   [self setSearchPageInteractionEnabled:NO];
 }
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+  if (scrollView == self.tableView && self.kind == NFBTimelineKindHome &&
+      !self.homeFeedPanTracking && !self.homeFeedSwitchAnimating) {
+    self.homeHeaderDragging = NO;
+    CGFloat height = [self homeNavigationHeight];
+    CGFloat velocity = -[scrollView.panGestureRecognizer velocityInView:self.view].y;
+    CGFloat collapse = NFBHeaderSettledCollapse(self.homeHeaderCollapse, height, velocity);
+    if (scrollView.contentOffset.y <= 0 || scrollView.contentSize.height <= scrollView.bounds.size.height || self.refreshControl.refreshing) collapse = 0;
+    [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.2 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+      [self applyHomeHeaderCollapse:collapse];
+      [self.view layoutIfNeeded];
+    } completion:nil];
+  }
   if (scrollView == self.searchPager && !decelerate) [self finishSearchPaging];
 }
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
@@ -2112,6 +2153,53 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }];
 }
 
+- (CGFloat)homeNavigationHeight {
+  return self.traitCollection.verticalSizeClass == UIUserInterfaceSizeClassCompact ? 32.0 : 44.0;
+}
+
+- (void)configureHomeHeaderWithLeftView:(UIView *)left titleView:(UIView *)title rightView:(UIView *)right {
+  if (!self.homeHeaderClipView) {
+    self.homeHeaderClipView = [UIView new];
+    self.homeHeaderClipView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.homeHeaderClipView.clipsToBounds = YES;
+    [self.view addSubview:self.homeHeaderClipView];
+    self.homeHeaderHeightConstraint = [self.homeHeaderClipView.heightAnchor constraintEqualToConstant:[self homeNavigationHeight]];
+    [NSLayoutConstraint activateConstraints:@[
+      [self.homeHeaderClipView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+      [self.homeHeaderClipView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+      [self.homeHeaderClipView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+      self.homeHeaderHeightConstraint
+    ]];
+    self.homeHeaderContentView = [UIView new];
+    self.homeHeaderContentView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.homeHeaderClipView addSubview:self.homeHeaderContentView];
+    self.homeHeaderContentHeightConstraint = [self.homeHeaderContentView.heightAnchor constraintEqualToConstant:[self homeNavigationHeight]];
+    [NSLayoutConstraint activateConstraints:@[
+      [self.homeHeaderContentView.bottomAnchor constraintEqualToAnchor:self.homeHeaderClipView.bottomAnchor],
+      [self.homeHeaderContentView.leadingAnchor constraintEqualToAnchor:self.homeHeaderClipView.leadingAnchor],
+      [self.homeHeaderContentView.trailingAnchor constraintEqualToAnchor:self.homeHeaderClipView.trailingAnchor],
+      self.homeHeaderContentHeightConstraint
+    ]];
+  }
+  for (UIView *view in self.homeHeaderContentView.subviews) [view removeFromSuperview];
+  for (UIView *view in @[left, title, right]) {
+    view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.homeHeaderContentView addSubview:view];
+    [view.centerYAnchor constraintEqualToAnchor:self.homeHeaderContentView.centerYAnchor].active = YES;
+  }
+  [NSLayoutConstraint activateConstraints:@[
+    [left.leadingAnchor constraintEqualToAnchor:self.homeHeaderContentView.safeAreaLayoutGuide.leadingAnchor constant:16],
+    [left.widthAnchor constraintEqualToConstant:44], [left.heightAnchor constraintEqualToConstant:44],
+    [title.centerXAnchor constraintEqualToAnchor:self.homeHeaderContentView.centerXAnchor],
+    [title.widthAnchor constraintEqualToConstant:32], [title.heightAnchor constraintEqualToConstant:32],
+    [right.trailingAnchor constraintEqualToAnchor:self.homeHeaderContentView.safeAreaLayoutGuide.trailingAnchor constant:-6],
+    [right.widthAnchor constraintEqualToConstant:44], [right.heightAnchor constraintEqualToConstant:44]
+  ]];
+  self.homeHeaderClipView.backgroundColor = NFBColorBackground();
+  self.homeHeaderContentView.backgroundColor = NFBColorBackground();
+  [self applyHomeHeaderCollapse:self.homeHeaderCollapse];
+}
+
 - (void)configureHomeTabsView {
   self.homeTabsView = [[UIView alloc] init];
   self.homeTabsView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2119,6 +2207,9 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
   self.homeTabsScrollView = [[UIScrollView alloc] init];
   self.homeTabsScrollView.translatesAutoresizingMaskIntoConstraints = NO;
+  // This is a horizontal strip, not a vertically inset scroll surface.
+  self.homeTabsScrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+  self.homeTabsScrollView.automaticallyAdjustsScrollIndicatorInsets = NO;
   self.homeTabsScrollView.showsHorizontalScrollIndicator = NO;
   self.homeTabsScrollView.alwaysBounceHorizontal = YES;
   self.homeTabsScrollView.scrollsToTop = NO;
@@ -2146,8 +2237,10 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [self.view addSubview:self.homeTabsView];
 
   UILayoutGuide *guide = self.view.safeAreaLayoutGuide;
+  NSLayoutYAxisAnchor *headerBottom = self.kind == NFBTimelineKindHome ? self.homeHeaderClipView.bottomAnchor : guide.topAnchor;
+  self.homeTabsTopConstraint = [self.homeTabsView.topAnchor constraintEqualToAnchor:headerBottom];
   [NSLayoutConstraint activateConstraints:@[
-    [self.homeTabsView.topAnchor constraintEqualToAnchor:guide.topAnchor],
+    self.homeTabsTopConstraint,
     [self.homeTabsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
     [self.homeTabsView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     [self.homeTabsView.heightAnchor constraintEqualToConstant:53.0],
@@ -2452,6 +2545,18 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (void)beginSuppressingTimelineSelectionForSwipe {
   self.homeFeedPanTracking = YES;
+  self.homeHeaderDragging = NO;
+  // Freeze the visible position if a vertical release animation is still running.
+  CALayer *presentation = self.homeHeaderClipView.layer.presentationLayer;
+  CGFloat collapse = presentation ? [self homeNavigationHeight] - presentation.bounds.size.height : self.homeHeaderCollapse;
+  [self.homeHeaderClipView.layer removeAllAnimations];
+  [self.homeHeaderContentView.layer removeAllAnimations];
+  [self.homeTabsView.layer removeAllAnimations];
+  [self.tableView.layer removeAllAnimations];
+  [UIView performWithoutAnimation:^{
+    [self applyHomeHeaderCollapse:collapse];
+    [self.view layoutIfNeeded];
+  }];
   self.suppressTimelineSelectionForSwipe = YES;
   self.tableView.allowsSelection = NO;
   NSIndexPath *selectedPath = self.tableView.indexPathForSelectedRow;
@@ -2467,6 +2572,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)cancelHomeFeedPan {
+  self.homeFeedSwitchAnimating = YES;
   [UIView animateWithDuration:0.18
                         delay:0.0
                       options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
@@ -2476,6 +2582,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   } completion:^(BOOL finished) {
     (void)finished;
     [self hideHomeFeedPreview];
+    self.homeFeedSwitchAnimating = NO;
     [self endSuppressingTimelineSelectionAfterSwipe];
   }];
 }
@@ -2488,8 +2595,12 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   }
 
   CGFloat width = MAX(1.0, CGRectGetWidth(self.tableView.bounds));
+  self.homeFeedSwitchAnimating = YES;
   UIView *outgoingSnapshot = [self.tableView snapshotViewAfterScreenUpdates:NO];
-  outgoingSnapshot.frame = self.tableView.frame;
+  // frame already includes the horizontal transform; copying it then applying
+  // the transform again makes the outgoing feed jump sideways at release.
+  outgoingSnapshot.bounds = CGRectMake(0, 0, CGRectGetWidth(self.tableView.bounds), CGRectGetHeight(self.tableView.bounds));
+  outgoingSnapshot.center = self.tableView.center;
   outgoingSnapshot.transform = self.tableView.transform;
   [self.view addSubview:outgoingSnapshot];
 
@@ -2510,6 +2621,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     self.hasLoadedOnce = NO;
   }
   [self.tableView reloadData];
+  self.tableView.contentOffset = CGPointZero;
   if (cachedDestinationItems.count == 0) [self refreshTimeline];
 
   CGFloat outgoingTarget = direction > 0 ? -width : width;
@@ -2528,6 +2640,11 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [self hideHomeFeedPreview];
     self.homeFeedSwitchAnimating = NO;
     [self endSuppressingTimelineSelectionAfterSwipe];
+    // Reconcile the destination only after horizontal geometry has settled.
+    [UIView animateWithDuration:UIAccessibilityIsReduceMotionEnabled() ? 0 : 0.2 animations:^{
+      [self scrollViewDidScroll:self.tableView];
+      [self.view layoutIfNeeded];
+    }];
     [self prefetchAdjacentHomeFeeds];
   }];
 }
@@ -3487,6 +3604,22 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   self.tableView.tableHeaderView = header;
 }
 
+- (void)profileUpdated:(NSNotification *)notification {
+  if (![self ownsCurrentAccount]) return;
+  NSDictionary *profile = notification.object;
+  self.profileUpdateGeneration++;
+  if ([self.profile[@"did"] isEqual:profile[@"did"]]) {
+    NSMutableDictionary *updated = [profile mutableCopy];
+    for (NSString *key in @[@"avatar",@"banner"]) {
+      NSString *loadedKey = [@"_nfbLoaded" stringByAppendingString:key.capitalizedString];
+      if ([self.profile[key] isEqual:profile[key]] && self.profile[loadedKey]) updated[loadedKey] = self.profile[loadedKey];
+    }
+    self.profile = updated;
+    [self updateProfileHeader];
+  }
+  [self refreshAccountChrome];
+}
+
 - (void)refreshAccountChrome {
   if (![self ownsCurrentAccount]) return;
   if (!self.avatarButtonImageView) return;
@@ -3518,11 +3651,12 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 - (void)loadProfileHeaderForActor:(NSString *)actor completion:(void (^)(BOOL success))completion {
   if (actor.length == 0) return;
   self.loadingProfileActor = actor;
+  NSUInteger updateGeneration = self.profileUpdateGeneration;
   __weak typeof(self) weakSelf = self;
   [[NFBAtprotoClient sharedClient] fetchProfileForActor:actor completion:^(NSDictionary *value, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
       __strong typeof(weakSelf) strongSelf = weakSelf;
-      if (!strongSelf) return;
+      if (!strongSelf || updateGeneration != strongSelf.profileUpdateGeneration) return;
       if ([strongSelf.loadingProfileActor isEqualToString:actor]) strongSelf.loadingProfileActor = nil;
       if (error || !value) {
         if (completion) completion(NO);
@@ -3540,8 +3674,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
         NSMutableDictionary *updatedProfile = [hydratedSelf.profile isKindOfClass:NSDictionary.class] ? [hydratedSelf.profile mutableCopy] : [NSMutableDictionary dictionary];
         UIImage *loadedAvatar = [hydratedProfile[@"_nfbLoadedAvatar"] isKindOfClass:UIImage.class] ? hydratedProfile[@"_nfbLoadedAvatar"] : nil;
         UIImage *loadedBanner = [hydratedProfile[@"_nfbLoadedBanner"] isKindOfClass:UIImage.class] ? hydratedProfile[@"_nfbLoadedBanner"] : nil;
-        if (loadedAvatar) updatedProfile[@"_nfbLoadedAvatar"] = loadedAvatar;
-        if (loadedBanner) updatedProfile[@"_nfbLoadedBanner"] = loadedBanner;
+        if (loadedAvatar && [hydratedProfile[@"avatar"] isEqual:updatedProfile[@"avatar"]]) updatedProfile[@"_nfbLoadedAvatar"] = loadedAvatar;
+        if (loadedBanner && [hydratedProfile[@"banner"] isEqual:updatedProfile[@"banner"]]) updatedProfile[@"_nfbLoadedBanner"] = loadedBanner;
         hydratedSelf.profile = updatedProfile;
         [hydratedSelf updateProfileHeader];
       }];
@@ -3650,7 +3784,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
   UILabel *name = [[UILabel alloc] init];
   name.translatesAutoresizingMaskIntoConstraints = NO;
-  name.font = NFBFont(20.0, NFBFontWeightHeavy);
+  // profilesFullNameFont: content font + 7; use this app's 15pt body baseline.
+  name.font = NFBFont(22.0, NFBFontWeightHeavy);
   name.textColor = NFBColorText();
   name.text = displayName;
   name.numberOfLines = 0;
@@ -3696,13 +3831,36 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   handleRow.alignment = UIStackViewAlignmentCenter;
   handleRow.spacing = 6.0;
 
-  UILabel *bio = [[UILabel alloc] init];
+  NFBInteractiveTextLabel *bio = [[NFBInteractiveTextLabel alloc] init];
   bio.translatesAutoresizingMaskIntoConstraints = NO;
   bio.font = NFBFont(15.0, NFBFontWeightRegular);
   bio.textColor = NFBColorText();
   bio.numberOfLines = 0;
   NSString *bioText = [self.profile[@"description"] isKindOfClass:[NSString class]] ? self.profile[@"description"] : @"";
   bio.attributedText = NFBTweetBodyAttributedString(bioText, bio.font);
+  __weak typeof(self) bioOwner = self;
+  bio.linkTapHandler = ^(NSURL *url) {
+    typeof(self) self = bioOwner;
+    if (self) NFBOpenTweetTextURL(url, self);
+  };
+  NFBTranslationView *bioTranslation = [NFBTranslationView new];
+  __weak typeof(self) translationOwner = self;
+  __weak UIView *translationHeader = header;
+  bioTranslation.sizeChanged = ^{
+    typeof(self) self = translationOwner;
+    UIView *header = translationHeader;
+    if (!self || !header || self.tableView.tableHeaderView != header) return;
+    CGFloat oldHeight = CGRectGetHeight(header.frame);
+    CGSize size = [header systemLayoutSizeFittingSize:CGSizeMake(CGRectGetWidth(header.frame), UILayoutFittingCompressedSize.height)
+                      withHorizontalFittingPriority:UILayoutPriorityRequired verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+    CGFloat height = ceil(size.height);
+    self.profileExpandedHeaderHeight += height - oldHeight;
+    self.profileCurrentHeaderHeight = height;
+    header.frame = CGRectMake(0, 0, CGRectGetWidth(header.frame), height);
+    self.tableView.tableHeaderView = header;
+    [self updateProfileNavigationForScrollOffset];
+  };
+  [bioTranslation configureWithText:bioText languages:@[] title:@"Translate bio" bodyFont:bio.font];
 
   UIStackView *metadata = [self profileMetadataStack];
 
@@ -3753,7 +3911,12 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   details.alignment = UIStackViewAlignmentLeading;
   details.spacing = 12.0;
   [details setCustomSpacing:1.0 afterView:nameRow];
-  if (bioText.length > 0) [details addArrangedSubview:bio];
+  if (bioText.length > 0) {
+    [details addArrangedSubview:bio];
+    [details addArrangedSubview:bioTranslation];
+    [details setCustomSpacing:4.0 afterView:bio];
+    [bioTranslation.widthAnchor constraintEqualToAnchor:details.widthAnchor].active = YES;
+  }
   if (metadata.arrangedSubviews.count > 0) [details addArrangedSubview:metadata];
   if (counts.arrangedSubviews.count > 0) [details addArrangedSubview:counts];
   if (mutualFollowers) [details addArrangedSubview:mutualFollowers];
@@ -3768,6 +3931,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   [header addSubview:tabsBottomBorder];
 
   self.profileHeaderBannerHeightConstraint = [banner.heightAnchor constraintEqualToConstant:[self profileExpandedBannerHeight]];
+  NSLayoutConstraint *detailsTop = [details.topAnchor constraintEqualToAnchor:avatar.bottomAnchor constant:9.0];
+  detailsTop.priority = UILayoutPriorityDefaultHigh;
   [NSLayoutConstraint activateConstraints:@[
     [banner.topAnchor constraintEqualToAnchor:header.topAnchor],
     [banner.leadingAnchor constraintEqualToAnchor:header.leadingAnchor],
@@ -3791,7 +3956,9 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [verifiedBadge.heightAnchor constraintEqualToConstant:20.0],
     [details.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16.0],
     [details.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16.0],
-    [details.topAnchor constraintEqualToAnchor:avatar.bottomAnchor constant:9.0],
+    detailsTop,
+    [details.topAnchor constraintGreaterThanOrEqualToAnchor:avatar.bottomAnchor constant:9.0],
+    [details.topAnchor constraintGreaterThanOrEqualToAnchor:actions.bottomAnchor constant:8.0],
     [followsYou.heightAnchor constraintGreaterThanOrEqualToConstant:18.0],
     [tabsScroll.topAnchor constraintEqualToAnchor:details.bottomAnchor constant:14.0],
     [tabsScroll.leadingAnchor constraintEqualToAnchor:header.leadingAnchor],
@@ -4019,6 +4186,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 	  stack.alignment = UIStackViewAlignmentLeading;
 	  stack.spacing = 3.0;
 
+  NSString *location = [self profileStringForKey:@"location"];
+  if (location.length) [stack addArrangedSubview:[self profileMetadataItemWithIcon:@"nfb_location" text:location accent:NO]];
   NSString *website = [self profileStringForKey:@"website"];
   NSString *websiteText = [self displayWebsiteTextForProfileWebsite:website];
 	  if (websiteText.length > 0) {
@@ -4055,7 +4224,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   label.translatesAutoresizingMaskIntoConstraints = NO;
   label.text = text;
   label.textColor = accent ? NFBColorAccent() : NFBColorSecondaryText();
-  label.font = NFBFont(15.0, NFBFontWeightRegular);
+  label.font = NFBFont(13.0, NFBFontWeightRegular);
   label.numberOfLines = 1;
   label.lineBreakMode = NSLineBreakByTruncatingTail;
   [label setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
@@ -4077,8 +4246,8 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 - (NSAttributedString *)profileCountsTextFollowing:(NSNumber *)following followers:(NSNumber *)followers {
   NSMutableAttributedString *text = [[NSMutableAttributedString alloc] init];
-  NSDictionary *countAttrs = @{NSForegroundColorAttributeName: NFBColorText(), NSFontAttributeName: NFBFont(15.0, NFBFontWeightBold)};
-  NSDictionary *labelAttrs = @{NSForegroundColorAttributeName: NFBColorSecondaryText(), NSFontAttributeName: NFBFont(15.0, NFBFontWeightRegular)};
+  NSDictionary *countAttrs = @{NSForegroundColorAttributeName: NFBColorText(), NSFontAttributeName: NFBFont(13.0, NFBFontWeightBold)};
+  NSDictionary *labelAttrs = @{NSForegroundColorAttributeName: NFBColorSecondaryText(), NSFontAttributeName: NFBFont(13.0, NFBFontWeightRegular)};
   [text appendAttributedString:[[NSAttributedString alloc] initWithString:NFBShortCountString(following.integerValue) attributes:countAttrs]];
   [text appendAttributedString:[[NSAttributedString alloc] initWithString:@" Following   " attributes:labelAttrs]];
   [text appendAttributedString:[[NSAttributedString alloc] initWithString:NFBShortCountString(followers.integerValue) attributes:countAttrs]];
@@ -4101,14 +4270,14 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     [textLabel.leadingAnchor constraintEqualToAnchor:control.leadingAnchor],
     [textLabel.trailingAnchor constraintEqualToAnchor:control.trailingAnchor],
     [textLabel.bottomAnchor constraintEqualToAnchor:control.bottomAnchor],
-    [control.heightAnchor constraintEqualToConstant:24.0]
+    [control.heightAnchor constraintGreaterThanOrEqualToConstant:24.0]
   ]];
   return control;
 }
 
 - (NSAttributedString *)profileCountTextWithCount:(NSNumber *)count label:(NSString *)label {
-  NSDictionary *countAttrs = @{NSForegroundColorAttributeName: NFBColorText(), NSFontAttributeName: NFBFont(15.0, NFBFontWeightBold)};
-  NSDictionary *labelAttrs = @{NSForegroundColorAttributeName: NFBColorSecondaryText(), NSFontAttributeName: NFBFont(15.0, NFBFontWeightRegular)};
+  NSDictionary *countAttrs = @{NSForegroundColorAttributeName: NFBColorText(), NSFontAttributeName: NFBFont(13.0, NFBFontWeightBold)};
+  NSDictionary *labelAttrs = @{NSForegroundColorAttributeName: NFBColorSecondaryText(), NSFontAttributeName: NFBFont(13.0, NFBFontWeightRegular)};
   NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:NFBShortCountString(count.integerValue) attributes:countAttrs];
   [text appendAttributedString:[[NSAttributedString alloc] initWithString:[@" " stringByAppendingString:(label.length > 0 ? label : @"")] attributes:labelAttrs]];
   return text;
@@ -4181,7 +4350,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   label.translatesAutoresizingMaskIntoConstraints = NO;
   label.text = text;
   label.textColor = NFBColorSecondaryText();
-  label.font = NFBFont(14.0, NFBFontWeightRegular);
+  label.font = NFBFont(15.0, NFBFontWeightRegular);
   label.numberOfLines = 2;
   label.lineBreakMode = NSLineBreakByTruncatingTail;
   [control addSubview:label];
@@ -4326,9 +4495,18 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 }
 
 - (void)editProfileTapped {
-  UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Edit profile" message:@"Profile editing is not wired in this native build yet." preferredStyle:UIAlertControllerStyleAlert];
-  [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
-  [self presentViewController:alert animated:YES completion:nil];
+  if (![self ownsCurrentAccount] || ![self.profile[@"did"] isEqual:NFBAtprotoSession.sharedSession.did]) return;
+  __weak typeof(self) weakSelf = self;
+  NFBEditProfileViewController *editor = [[NFBEditProfileViewController alloc] initWithProfile:self.profile completion:^(NSDictionary *profile) {
+    typeof(self) self = weakSelf;
+    if (!self || ![self ownsCurrentAccount] || ![self.profile[@"did"] isEqual:profile[@"did"]]) return;
+    self.profileUpdateGeneration++;
+    self.profile = profile;
+    [self updateProfileHeader];
+  }];
+  UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:editor];
+  NFBApplyNavigationAppearance(nav); nav.modalPresentationStyle = UIModalPresentationFullScreen;
+  [self presentViewController:nav animated:YES completion:nil];
 }
 
 - (void)shareProfileTapped {
@@ -4570,6 +4748,7 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
     UIImage *image = [UIImage imageWithData:data];
     if (!image) return;
     dispatch_async(dispatch_get_main_queue(), ^{
+      if (![urlString isEqual:self.profile[@"banner"]] || bannerView != self.profileHeaderBannerImageView) return;
       bannerView.image = image;
       [self updateProfileCoverChromeImage:image];
     });
@@ -5538,6 +5717,17 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
 
 #pragma mark - UITableViewDelegate
 
+- (void)applyHomeHeaderCollapse:(CGFloat)collapse {
+  if (self.kind != NFBTimelineKindHome) return;
+  CGFloat height = [self homeNavigationHeight];
+  collapse = MAX(0, MIN(height, collapse));
+  self.homeHeaderCollapse = collapse;
+  self.homeHeaderHeightConstraint.constant = height - collapse;
+  self.homeHeaderContentView.alpha = 1.0 - collapse / height;
+  self.homeHeaderContentView.userInteractionEnabled = collapse < height;
+  self.homeHeaderContentView.accessibilityElementsHidden = collapse >= height;
+}
+
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
   if (scrollView == self.searchPager) {
     NSInteger page = NFBSearchPageForOffset(scrollView.contentOffset.x, CGRectGetWidth(scrollView.bounds), self.searchPages.count);
@@ -5550,8 +5740,21 @@ static NSString * const NFBNotificationFilterDefaultAvatarKey = @"nfb_notificati
   if (scrollView == self.tableView) {
     [self updateFeedNavigationForScrollOffset];
     if (self.kind == NFBTimelineKindHome && self.navigationController.topViewController == self &&
-        scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top && self.navigationController.navigationBarHidden) {
-      [self.navigationController setNavigationBarHidden:NO animated:YES];
+        !self.homeFeedPanTracking && !self.homeFeedSwitchAnimating) {
+      CGFloat panY = [scrollView.panGestureRecognizer translationInView:self.view].y;
+      CGFloat delta = self.homeHeaderLastPanY - panY;
+      self.homeHeaderLastPanY = panY;
+      if (scrollView.contentOffset.y <= 0 || self.refreshControl.refreshing) {
+        [self applyHomeHeaderCollapse:0];
+      } else if (self.homeHeaderDragging && scrollView.dragging && !self.homeFeedPanTracking) {
+        CGFloat bottom = MAX(0, scrollView.contentSize.height - CGRectGetHeight(scrollView.bounds));
+        // Bottom bounce must not reverse the user's intended collapse direction.
+        if (scrollView.contentOffset.y <= bottom) {
+          [self applyHomeHeaderCollapse:NFBHeaderCollapse(self.homeHeaderCollapse, delta,
+             [self homeNavigationHeight], scrollView.contentOffset.y,
+             scrollView.contentSize.height > CGRectGetHeight(scrollView.bounds))];
+        }
+      }
     }
   }
   [self updateProfileNavigationForScrollOffset];

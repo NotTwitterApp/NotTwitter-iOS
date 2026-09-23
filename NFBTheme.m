@@ -1,3 +1,4 @@
+#import "NFBRichText.h"
 #import "NFBPostLinkResolver.h"
 #import "NFBTheme.h"
 
@@ -69,12 +70,14 @@ static void NFBConfigureTabBarItemAppearance(UITabBarItemAppearance *itemAppeara
 
 static UITabBarAppearance *NFBConfiguredTabBarAppearance(void) {
   UITabBarAppearance *appearance = [[UITabBarAppearance alloc] init];
-  [appearance configureWithTransparentBackground];
+  [appearance configureWithOpaqueBackground];
   if ([appearance respondsToSelector:@selector(setBackgroundEffect:)]) {
     appearance.backgroundEffect = nil;
   }
-  appearance.backgroundColor = UIColor.clearColor;
-  appearance.shadowColor = UIColor.clearColor;
+  appearance.backgroundColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
+  appearance.shadowColor = UIColor.clearColor; // Draw one physical pixel in the controller.
+  appearance.stackedItemPositioning = UITabBarItemPositioningFill;
+  appearance.stackedItemSpacing = 0;
   NFBConfigureTabBarItemAppearance(appearance.stackedLayoutAppearance);
   NFBConfigureTabBarItemAppearance(appearance.inlineLayoutAppearance);
   NFBConfigureTabBarItemAppearance(appearance.compactInlineLayoutAppearance);
@@ -368,7 +371,7 @@ static UIColor *NFBResolvedIPAColor(NFBIPAColorRole role) {
     case NFBIPAColorRoleNavigationBarShadow:
       return [NFBResolvedIPAColor(NFBIPAColorRoleDivider) colorWithAlphaComponent:0.72];
     case NFBIPAColorRoleTabBarBackground:
-      return [NFBResolvedIPAColor(NFBIPAColorRoleBackground) colorWithAlphaComponent:light ? 0.84 : 0.76];
+      return dim ? NFBColorFromHex(0x1a242c) : NFBResolvedIPAColor(NFBIPAColorRoleBackground);
     case NFBIPAColorRoleTabBarDivider:
       return [NFBResolvedIPAColor(NFBIPAColorRoleDivider) colorWithAlphaComponent:0.72];
     case NFBIPAColorRoleDashDrawerBackground:
@@ -1010,58 +1013,6 @@ static NSString *NFBShortDisplayURLString(NSString *urlString, NSString *fallbac
   return display.length > 0 ? display : candidate;
 }
 
-static NSRange NFBTrimmedURLRangeInText(NSString *text, NSRange range) {
-  if (range.location == NSNotFound || NSMaxRange(range) > text.length) return range;
-  NSCharacterSet *trailing = [NSCharacterSet characterSetWithCharactersInString:@".,!?;:)"];
-  while (range.length > 0) {
-    unichar c = [text characterAtIndex:NSMaxRange(range) - 1];
-    if (![trailing characterIsMember:c]) break;
-    range.length -= 1;
-  }
-  return range;
-}
-
-static NSDictionary *NFBDisplayTextAndLinksByShorteningURLs(NSString *text) {
-  NSString *safeText = text ?: @"";
-  NSMutableString *displayText = [NSMutableString string];
-  NSMutableArray<NSDictionary *> *links = [NSMutableArray array];
-  NSError *error = nil;
-  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)" options:0 error:&error];
-  if (error || !regex || safeText.length == 0) return @{@"text": safeText, @"links": links};
-  NSUInteger cursor = 0;
-  NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:safeText options:0 range:NSMakeRange(0, safeText.length)];
-  for (NSTextCheckingResult *match in matches) {
-    if (match.numberOfRanges < 2) continue;
-    NSRange tokenRange = NFBTrimmedURLRangeInText(safeText, [match rangeAtIndex:1]);
-    if (tokenRange.location == NSNotFound || NSMaxRange(tokenRange) > safeText.length || tokenRange.location < cursor) continue;
-    [displayText appendString:[safeText substringWithRange:NSMakeRange(cursor, tokenRange.location - cursor)]];
-    NSString *rawURL = [safeText substringWithRange:tokenRange];
-    NSURL *url = NFBExternalURLForString(rawURL);
-    if (!url) {
-      [displayText appendString:rawURL];
-      cursor = NSMaxRange(tokenRange);
-      continue;
-    }
-    NSString *visibleURL = NFBShortDisplayURLString(url.absoluteString, rawURL);
-    NSRange visibleRange = NSMakeRange(displayText.length, visibleURL.length);
-    [displayText appendString:visibleURL];
-    [links addObject:@{@"range": [NSValue valueWithRange:visibleRange], @"url": url}];
-    cursor = NSMaxRange(tokenRange);
-  }
-  if (cursor < safeText.length) [displayText appendString:[safeText substringFromIndex:cursor]];
-  return @{@"text": displayText ?: safeText, @"links": links};
-}
-
-static NSRange NFBUtf16RangeForUTF8ByteRange(NSString *text, NSInteger start, NSInteger end) {
-  if (start < 0 || end < start) return NSMakeRange(NSNotFound, 0);
-  NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
-  if (end > (NSInteger)data.length) return NSMakeRange(NSNotFound, 0);
-  NSString *prefix = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange(0, (NSUInteger)start)] encoding:NSUTF8StringEncoding];
-  NSString *segment = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange((NSUInteger)start, (NSUInteger)(end - start))] encoding:NSUTF8StringEncoding];
-  if (!prefix || !segment) return NSMakeRange(NSNotFound, 0);
-  return NSMakeRange(prefix.length, segment.length);
-}
-
 static NSURL *NFBURLForFacetFeature(NSDictionary *feature, NSString *token, NSString **displayOverride) {
   if (![feature isKindOfClass:NSDictionary.class]) return nil;
   NSString *type = [feature[@"$type"] isKindOfClass:NSString.class] ? feature[@"$type"] : @"";
@@ -1069,12 +1020,15 @@ static NSURL *NFBURLForFacetFeature(NSDictionary *feature, NSString *token, NSSt
   if ([type containsString:@"#link"]) {
     NSString *uri = [feature[@"uri"] isKindOfClass:NSString.class] ? feature[@"uri"] : @"";
     NSURL *url = NFBExternalURLForString(uri);
-    if (displayOverride) *displayOverride = NFBShortDisplayURLString(uri, token);
+    // Preserve labels supplied by another client (for example, "read this").
+    if (displayOverride && ([uri caseInsensitiveCompare:token] == NSOrderedSame ||
+        [uri caseInsensitiveCompare:[@"https://" stringByAppendingString:token]] == NSOrderedSame))
+      *displayOverride = NFBShortDisplayURLString(uri, token);
     return url;
   }
   if ([type containsString:@"#mention"]) {
     NSString *actor = [feature[@"did"] isKindOfClass:NSString.class] ? feature[@"did"] : @"";
-    if (actor.length == 0 && [token hasPrefix:@"@"]) actor = [token substringFromIndex:1];
+    if (actor.length == 0) actor = [feature[@"handle"] isKindOfClass:NSString.class] ? feature[@"handle"] : @"";
     return NFBInternalTextLinkURL(@"profile", @"actor", actor);
   }
   if ([type containsString:@"#tag"]) {
@@ -1086,42 +1040,15 @@ static NSURL *NFBURLForFacetFeature(NSDictionary *feature, NSString *token, NSSt
   return nil;
 }
 
-static NSDictionary *NFBDisplayTextAndLinksForPost(NSDictionary *post) {
-  NSDictionary *record = NFBPostDisplayRecord(post);
+static NSDictionary *NFBDisplayTextAndLinksForRecord(NSDictionary *record, BOOL shortenURLs) {
   NSString *text = [record[@"text"] isKindOfClass:NSString.class] ? record[@"text"] : @"";
-  NSArray *facets = [record[@"facets"] isKindOfClass:NSArray.class] ? record[@"facets"] : @[];
-  if (text.length == 0 || facets.count == 0) return NFBDisplayTextAndLinksByShorteningURLs(text);
-
   NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
-  for (NSDictionary *facet in facets) {
-    if (![facet isKindOfClass:NSDictionary.class]) continue;
-    NSDictionary *index = [facet[@"index"] isKindOfClass:NSDictionary.class] ? facet[@"index"] : @{};
-    NSNumber *start = [index[@"byteStart"] respondsToSelector:@selector(integerValue)] ? index[@"byteStart"] : nil;
-    NSNumber *end = [index[@"byteEnd"] respondsToSelector:@selector(integerValue)] ? index[@"byteEnd"] : nil;
-    if (!start || !end) continue;
-    NSRange textRange = NFBUtf16RangeForUTF8ByteRange(text, start.integerValue, end.integerValue);
-    if (textRange.location == NSNotFound || NSMaxRange(textRange) > text.length || textRange.length == 0) continue;
-    NSString *token = [text substringWithRange:textRange];
-    NSArray *features = [facet[@"features"] isKindOfClass:NSArray.class] ? facet[@"features"] : @[];
-    for (NSDictionary *feature in features) {
-      NSString *display = token;
-      NSURL *url = NFBURLForFacetFeature(feature, token, &display);
-      if (!url) continue;
-      [entries addObject:@{@"range": [NSValue valueWithRange:textRange],
-                           @"display": display ?: token,
-                           @"url": url}];
-      break;
-    }
+  for (NSDictionary *span in NFBRichTextSpans(text, record[@"facets"])) {
+    NSRange range = [span[@"range"] rangeValue];
+    NSString *token = [text substringWithRange:range], *display = token;
+    NSURL *url = NFBURLForFacetFeature(span[@"feature"], token, shortenURLs ? &display : NULL);
+    if (url) [entries addObject:@{@"range":span[@"range"], @"display":display, @"url":url}];
   }
-  if (entries.count == 0) return NFBDisplayTextAndLinksByShorteningURLs(text);
-
-  [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-    NSRange aRange = [a[@"range"] rangeValue];
-    NSRange bRange = [b[@"range"] rangeValue];
-    if (aRange.location < bRange.location) return NSOrderedAscending;
-    if (aRange.location > bRange.location) return NSOrderedDescending;
-    return NSOrderedSame;
-  }];
 
   NSMutableString *displayText = [NSMutableString string];
   NSMutableArray<NSDictionary *> *links = [NSMutableArray array];
@@ -1139,27 +1066,6 @@ static NSDictionary *NFBDisplayTextAndLinksForPost(NSDictionary *post) {
   }
   if (cursor < text.length) [displayText appendString:[text substringFromIndex:cursor]];
   return @{@"text": displayText ?: text, @"links": links};
-}
-
-static BOOL NFBAttributedStringHasLinkInRange(NSAttributedString *attributed, NSRange range) {
-  if (range.location == NSNotFound || NSMaxRange(range) > attributed.length) return YES;
-  __block BOOL hasLink = NO;
-  [attributed enumerateAttribute:NFBTextLinkURLAttributeName inRange:range options:0 usingBlock:^(id value, NSRange subrange, BOOL *stop) {
-    (void)subrange;
-    if (value) {
-      hasLink = YES;
-      *stop = YES;
-    }
-  }];
-  if (hasLink) return YES;
-  [attributed enumerateAttribute:NSLinkAttributeName inRange:range options:0 usingBlock:^(id value, NSRange subrange, BOOL *stop) {
-    (void)subrange;
-    if (value) {
-      hasLink = YES;
-      *stop = YES;
-    }
-  }];
-  return hasLink;
 }
 
 static void NFBApplyTweetLink(NSMutableAttributedString *attributed, NSURL *url, NSRange range) {
@@ -1195,7 +1101,6 @@ static NSAttributedString *NFBTweetBodyAttributedStringWithDisplay(NSString *tex
   NSMutableAttributedString *attributed = [[NSMutableAttributedString alloc] initWithString:safeText attributes:attributes];
   if (safeText.length == 0) return attributed;
 
-  UIColor *accent = NFBColorAccent();
   for (NSDictionary *link in links ?: @[]) {
     NSValue *rangeValue = [link[@"range"] isKindOfClass:NSValue.class] ? link[@"range"] : nil;
     NSURL *url = [link[@"url"] isKindOfClass:NSURL.class] ? link[@"url"] : nil;
@@ -1203,53 +1108,21 @@ static NSAttributedString *NFBTweetBodyAttributedStringWithDisplay(NSString *tex
     NFBApplyTweetLink(attributed, url, rangeValue.rangeValue);
   }
 
-  NSArray<NSString *> *patterns = @[
-    @"(^|[^A-Za-z0-9_./])(@[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)",
-    @"(^|[^A-Za-z0-9_])(#[\\p{L}\\p{M}\\p{N}_]+)"
-  ];
-  for (NSString *pattern in patterns) {
-    NSError *error = nil;
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:&error];
-    if (error || !regex) continue;
-    NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:safeText options:0 range:NSMakeRange(0, safeText.length)];
-    for (NSTextCheckingResult *match in matches) {
-      if (match.numberOfRanges < 3) continue;
-      NSRange tokenRange = [match rangeAtIndex:2];
-      if (tokenRange.location != NSNotFound && NSMaxRange(tokenRange) <= safeText.length) {
-        [attributed addAttribute:NSForegroundColorAttributeName value:accent range:tokenRange];
-        if (!NFBAttributedStringHasLinkInRange(attributed, tokenRange)) {
-          NSString *token = [safeText substringWithRange:tokenRange];
-          NSURL *url = [token hasPrefix:@"@"]
-            ? NFBInternalTextLinkURL(@"profile", @"actor", [token substringFromIndex:1])
-            : NFBInternalTextLinkURL(@"search", @"query", token);
-          NFBApplyTweetLink(attributed, url, tokenRange);
-        }
-      }
-    }
-  }
-  NSError *urlError = nil;
-  NSRegularExpression *urlRegex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)" options:0 error:&urlError];
-  if (!urlError && urlRegex) {
-    NSArray<NSTextCheckingResult *> *urlMatches = [urlRegex matchesInString:safeText options:0 range:NSMakeRange(0, safeText.length)];
-    for (NSTextCheckingResult *match in urlMatches) {
-      if (match.numberOfRanges < 2) continue;
-      NSRange tokenRange = NFBTrimmedURLRangeInText(safeText, [match rangeAtIndex:1]);
-      if (NFBAttributedStringHasLinkInRange(attributed, tokenRange)) continue;
-      NSString *token = [safeText substringWithRange:tokenRange];
-      NSURL *url = NFBExternalURLForString(token);
-      NFBApplyTweetLink(attributed, url, tokenRange);
-    }
-  }
   return NFBAttributedStringByReplacingEmojiWithTwemoji(attributed, resolvedFont);
 }
 
 NSAttributedString *NFBTweetBodyAttributedString(NSString *text, UIFont *font) {
-  NSDictionary *display = NFBDisplayTextAndLinksByShorteningURLs(text ?: @"");
+  NSDictionary *display = NFBDisplayTextAndLinksForRecord(@{@"text":text ?: @""}, YES);
   return NFBTweetBodyAttributedStringWithDisplay(display[@"text"], display[@"links"], font);
 }
 
 NSAttributedString *NFBTweetBodyAttributedStringForPost(NSDictionary *post, UIFont *font) {
-  NSDictionary *display = NFBDisplayTextAndLinksForPost(post ?: @{});
+  NSDictionary *display = NFBDisplayTextAndLinksForRecord(NFBPostDisplayRecord(post ?: @{}), YES);
+  return NFBTweetBodyAttributedStringWithDisplay(display[@"text"], display[@"links"], font);
+}
+
+NSAttributedString *NFBMessageBodyAttributedString(NSDictionary *record, UIFont *font) {
+  NSDictionary *display = NFBDisplayTextAndLinksForRecord(record ?: @{}, NO);
   return NFBTweetBodyAttributedStringWithDisplay(display[@"text"], display[@"links"], font);
 }
 
@@ -1268,35 +1141,8 @@ NSAttributedString *NFBComposerTextAttributedString(NSString *text, UIFont *font
   if (safeText.length == 0) return attributed;
 
   UIColor *accent = NFBColorAccent();
-  NSArray<NSString *> *patterns = @[
-    @"(^|[^A-Za-z0-9_./])(@[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)",
-    @"(^|[^A-Za-z0-9_])(#[\\p{L}\\p{M}\\p{N}_]+)"
-  ];
-  for (NSString *pattern in patterns) {
-    NSError *error = nil;
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:&error];
-    if (error || !regex) continue;
-    NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:safeText options:0 range:NSMakeRange(0, safeText.length)];
-    for (NSTextCheckingResult *match in matches) {
-      if (match.numberOfRanges < 3) continue;
-      NSRange tokenRange = [match rangeAtIndex:2];
-      if (tokenRange.location != NSNotFound && NSMaxRange(tokenRange) <= safeText.length) {
-        [attributed addAttribute:NSForegroundColorAttributeName value:accent range:tokenRange];
-      }
-    }
-  }
-
-  NSError *urlError = nil;
-  NSRegularExpression *urlRegex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\b((?:https?://|www\\.)[^\\s<>()]+)" options:0 error:&urlError];
-  if (!urlError && urlRegex) {
-    NSArray<NSTextCheckingResult *> *urlMatches = [urlRegex matchesInString:safeText options:0 range:NSMakeRange(0, safeText.length)];
-    for (NSTextCheckingResult *match in urlMatches) {
-      if (match.numberOfRanges < 2) continue;
-      NSRange tokenRange = NFBTrimmedURLRangeInText(safeText, [match rangeAtIndex:1]);
-      if (tokenRange.location != NSNotFound && NSMaxRange(tokenRange) <= safeText.length) {
-        [attributed addAttribute:NSForegroundColorAttributeName value:accent range:tokenRange];
-      }
-    }
+  for (NSDictionary *span in NFBRichTextSpans(safeText, nil)) {
+    [attributed addAttribute:NSForegroundColorAttributeName value:accent range:[span[@"range"] rangeValue]];
   }
   return attributed;
 }
@@ -1893,11 +1739,13 @@ void NFBApplyTabBarAppearance(UITabBar *tabBar) {
   NFBObserveAppearance(tabBar, ^(id owner) { NFBApplyTabBarAppearance(owner); });
   tabBar.tintColor = NFBNeoFreeBirdTabBarSelectedTintColor();
   tabBar.unselectedItemTintColor = NFBNeoFreeBirdTabBarNormalTintColor();
-  tabBar.barTintColor = UIColor.clearColor;
-  tabBar.backgroundColor = UIColor.clearColor;
+  tabBar.barTintColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
+  tabBar.backgroundColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
+  tabBar.opaque = YES;
+  tabBar.itemPositioning = UITabBarItemPositioningFill;
   tabBar.backgroundImage = [UIImage new];
   tabBar.shadowImage = [UIImage new];
-  tabBar.translucent = YES;
+  tabBar.translucent = NO;
 
   if (NSClassFromString(@"UITabBarAppearance")) {
     UITabBarAppearance *appearance = NFBConfiguredTabBarAppearance();
@@ -1918,11 +1766,11 @@ void NFBApplyAppAppearance(UIWindow *window) {
 
   [UITabBar appearance].tintColor = NFBNeoFreeBirdTabBarSelectedTintColor();
   [UITabBar appearance].unselectedItemTintColor = NFBNeoFreeBirdTabBarNormalTintColor();
-  [UITabBar appearance].barTintColor = UIColor.clearColor;
-  [UITabBar appearance].backgroundColor = UIColor.clearColor;
+  [UITabBar appearance].barTintColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
+  [UITabBar appearance].backgroundColor = NFBIPAColor(NFBIPAColorRoleTabBarBackground);
   [UITabBar appearance].backgroundImage = [UIImage new];
   [UITabBar appearance].shadowImage = [UIImage new];
-  [UITabBar appearance].translucent = YES;
+  [UITabBar appearance].translucent = NO;
 
   if (NSClassFromString(@"UITabBarAppearance")) {
     UITabBarAppearance *appearance = NFBConfiguredTabBarAppearance();

@@ -10,3 +10,5 @@ typedef void (^NFBPostLinkFetch)(NSString *method, NSDictionary *params, void (^
 
 // Presentation-only text and facets; the original record remains unchanged.
 NSDictionary *NFBPostDisplayRecord(NSDictionary *post);
+
+NSDictionary *NFBRecordByHidingLinkedURL(NSDictionary *record, NSString *target);

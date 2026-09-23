@@ -51,6 +51,8 @@ done
 [[ -d "$THEOS_DIR" ]] || { echo "Theos not found at $THEOS_DIR." >&2; exit 2; }
 [[ -d "$SDK_DIR" ]] || { echo "iPhoneOS SDK not found at $SDK_DIR." >&2; exit 2; }
 
+: "${TRANSLATION_SDKROOT:?Set TRANSLATION_SDKROOT to an iOS 18+ SDK for the translation framework}"
+
 export THEOS="$THEOS_DIR"
 export SDKROOT="$SDK_DIR"
 export PATH="$LDID_DIR:$PATH"

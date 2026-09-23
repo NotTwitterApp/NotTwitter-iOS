@@ -1,3 +1,4 @@
+#import "NFBTranslationView.h"
 #import "NFBQuotedPostView.h"
 
 #import "NFBAtprotoClient.h"
@@ -17,6 +18,7 @@
 @property (nonatomic, strong) UILabel *handleLabel;
 @property (nonatomic, strong) UILabel *timeLabel;
 @property (nonatomic, strong) NFBInteractiveTextLabel *bodyLabel;
+@property (nonatomic, strong) NFBTranslationView *translationView;
 @property (nonatomic, strong) UIView *tombstoneView;
 @property (nonatomic, strong) NFBInteractiveTextLabel *tombstoneTitleLabel;
 @property (nonatomic, strong) NFBInteractiveTextLabel *tombstoneSubtitleLabel;
@@ -98,9 +100,12 @@
   self.headerStack.spacing = 8.0;
   self.headerStack.userInteractionEnabled = NO;
 
+  self.translationEnabled = YES;
+  self.translationView = [NFBTranslationView new];
   self.bodyLabel = [[NFBInteractiveTextLabel alloc] init];
   self.bodyLabel.font = NFBFont(NFBIPAMetricValue(NFBIPAMetricEmbeddedCardBodyFontSize), NFBFontWeightRegular);
   self.bodyLabel.textColor = NFBColorText();
+  [self.translationView applyTheme];
   self.bodyLabel.numberOfLines = 5;
   self.bodyLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [self.bodyLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
@@ -154,7 +159,7 @@
   self.externalCardView.quotedCardStyle = YES;
   self.externalCardView.hidden = YES;
 
-  self.textStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.headerStack, self.tombstoneView, self.bodyLabel]];
+  self.textStack = [[UIStackView alloc] initWithArrangedSubviews:@[self.headerStack, self.tombstoneView, self.bodyLabel, self.translationView]];
   self.textStack.axis = UILayoutConstraintAxisVertical;
   self.textStack.alignment = UIStackViewAlignmentFill;
   self.textStack.layoutMarginsRelativeArrangement = YES;
@@ -215,14 +220,14 @@
   if (!hitView) return nil;
   if ([hitView isDescendantOfView:self.mediaView]) return hitView;
   if ([hitView isDescendantOfView:self.externalCardView]) return hitView;
-  if (hitView == self.bodyLabel) return hitView;
+  if (hitView == self.bodyLabel || [hitView isDescendantOfView:self.translationView]) return hitView;
   return self;
 }
 
 - (void)configureWithPost:(NSDictionary *)post {
   self.post = post;
   self.hidden = post.count == 0;
-  if (self.hidden) return;
+  if (self.hidden) { [self.translationView reset]; return; }
   self.tombstoned = NO;
   NSDictionary *tombstone = NFBModerationTombstoneForFeedItem(post, post);
   if (tombstone.count > 0) {
@@ -241,6 +246,8 @@
 
   self.bodyLabel.attributedText = NFBTweetBodyAttributedStringForPost(post, self.bodyLabel.font);
   self.bodyLabel.hidden = self.bodyLabel.attributedText.length == 0;
+  if (self.translationEnabled) [self.translationView configureWithPost:post bodyFont:self.bodyLabel.font];
+  else [self.translationView reset];
 
   NSArray<NSDictionary *> *mediaItems = NFBModerationMediaItemsByApplyingWarnings([NFBAtprotoClient mediaItemsForPost:post], post);
   self.mediaItems = mediaItems;
@@ -293,6 +300,7 @@
   self.handleLabel.textColor = NFBColorSecondaryText();
   self.timeLabel.textColor = NFBColorSecondaryText();
   self.bodyLabel.textColor = NFBColorText();
+  [self.translationView applyTheme];
   if (self.post) self.bodyLabel.attributedText = NFBTweetBodyAttributedStringForPost(self.post, self.bodyLabel.font);
   NFBApplyTombstoneAppearance(self.tombstoneView, self.tombstoneTitleLabel, self.tombstoneSubtitleLabel, NFBIPAMetricValue(NFBIPAMetricEmbeddedCardBodyFontSize), 13.0);
   [self.mediaView applyTheme];
@@ -357,6 +365,7 @@
   self.tombstoned = YES;
   self.headerStack.hidden = YES;
   self.bodyLabel.hidden = YES;
+  [self.translationView reset];
   self.mediaView.hidden = YES;
   self.externalCardView.hidden = YES;
   self.tombstoneView.hidden = NO;
